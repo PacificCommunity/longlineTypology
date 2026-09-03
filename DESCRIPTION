@@ -1,11 +1,23 @@
 Package: longlineTypology
-Title: What the Package Does (One Line, Title Case)
+Title: Clustering Analysis for Longline Fisheries Data
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
-License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
-    license
+    person("Romain", "Forestier", , "romainf@spc.int", role = c("aut", "cre"))
+Description: Implements a k-means clustering method to develop a typology
+    of heterogeneous longline fishing practices, aggregating fisheries
+    data into distinct groups based on shared technical and operational
+    characteristics. Designed to accept fisheries catch-effort and
+    length-frequency data in the format produced by the 'seafisheries'
+    package, though any correctly formatted fisheries data can be used.
+    The clustering method is described in the manuscript,
+    "A comprehensive method to integrate fisheries data in
+    spatially-explicit population dynamics models".
+License: GPL (>= 3)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 8.0.0
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+URL: https://github.com/PacificCommunity/longlineTypology
+BugReports: https://github.com/PacificCommunity/longlineTypology/issues
