@@ -16,8 +16,19 @@ License: GPL (>= 3)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 8.0.0
+Imports:
+    ggplot2,
+    factoextra,
+    cluster,
+    rlang
 Suggests: 
-    testthat (>= 3.0.0)
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0),
+    dplyr,
+    lubridate,
+    here
 Config/testthat/edition: 3
 URL: https://github.com/PacificCommunity/longlineTypology
 BugReports: https://github.com/PacificCommunity/longlineTypology/issues
+VignetteBuilder: knitr

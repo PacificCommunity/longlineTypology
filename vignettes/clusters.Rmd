@@ -1,0 +1,285 @@
+---
+title: "Clustering longline fishing strategies"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Clustering longline fishing strategies}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(longlineTypology)
+library(dplyr)
+library(lubridate)
+library(here)
+
+stat_list <- list()
+```
+
+This document demonstrates clustering of operational longline data to identify
+fishing strategies, using a small bundled mock dataset. For a real analysis,
+replace the mock data with output from the `seafisheries` processing pipeline
+in the same format.
+
+Summary:
+
+- Selects relevant variables for clustering
+- Performs PCA to reduce dimensionality
+- Uses gap statistic to determine optimal number of clusters
+- Assigns clusters to all data points
+- Merges small clusters based on catch threshold
+
+# Load mock data
+
+```{r}
+
+EC_clean <- readRDS(system.file("extdata", "mockdata", "LL_mock.RDS",
+                                 package = "longlineTypology"))
+stat_list$nrow_total <- nrow(EC_clean)
+```
+
+```{r}
+
+EC_clean <- EC_clean |>
+	mutate(
+		total_n      = yft_n + alb_n + bet_n,
+		yft_fraction = ifelse(total_n > 0, yft_n / total_n, 0),
+		alb_fraction = ifelse(total_n > 0, alb_n / total_n, 0),
+		bet_fraction = ifelse(total_n > 0, bet_n / total_n, 0)
+	) |>
+	rename(mean_hbf = hbf) |>
+	filter(!is.na(mean_hbf))
+```
+
+# Define clustering parameters
+
+```{r}
+# Clustering scenario: yellowfin, bigeye, albacore + hooks between floats
+scenario <- "yba_hbf"
+
+# PCA and kmeans parameters
+pca_variance_threshold <- 0.7   # Retain PCs explaining 70% of variance
+sample_no              <- 100   # Sample size per replicate for gap statistic
+kmeans_set             <- 15    # Number of kmeans replicates
+max_k                  <- 20    # Maximum number of clusters to test
+iter_max               <- 1e6   # Maximum iterations for kmeans
+nstart                 <- 10    # Number of random starts for kmeans
+B_var                  <- 25    # Bootstrap replicates for gap statistic
+
+# Cluster merging parameters
+catch_threshold <- 3            # Merge clusters with < 3% of total catch
+```
+
+# Select and prepare variables
+
+```{r}
+pca_select <- selectScenario(scenario)
+
+cat("Variables selected for clustering:\n")
+print(pca_select)
+
+select_dat <- EC_clean[, pca_select]
+pca_scaled <- pcaScale(select_dat, method = "zscore")
+```
+
+# Principal Component Analysis
+
+```{r}
+pca_res <- customPCA(pca_scaled,
+				 variance_threshold = pca_variance_threshold,
+				 print_it = FALSE)
+
+cat("PCA retained", pca_res$no_var, "components explaining >=",
+	pca_variance_threshold * 100, "% of variance\n\n")
+
+pca_full <- pca_res$x[, 1:pca_res$no_var]
+
+# Filter to post-1990 data for clustering
+indices_90  <- which(year(EC_clean$ymd) >= 1990)
+pca_full_90 <- pca_full[indices_90, ]
+
+cat("Using", nrow(pca_full_90), "observations from 1990 onwards for clustering\n")
+stat_list$nrow_clustering <- nrow(pca_full_90)
+```
+
+# Determine optimal number of clusters
+
+```{r}
+set.seed(123)
+sample_indices <- lapply(1:kmeans_set, function(x) {
+	sample(1:nrow(pca_full_90), size = sample_no, replace = TRUE)
+})
+
+cat("\nRunning", kmeans_set, "kmeans replicates on samples of",
+	sample_no, "observations...\n")
+
+kmeans_res <- list()
+gap_stat   <- list()
+
+for (i in 1:kmeans_set) {
+	pca_sub <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
+
+	res <- customKmeans(pca_sub,
+						max_k      = max_k,
+						random_set = B_var,
+						iter_max   = iter_max,
+						nstart     = nstart,
+						d.power    = 2,
+						print_it   = FALSE)
+
+	kmeans_res[[i]] <- res$kmeans
+	gap_stat[[i]]   <- res$gap_stat
+}
+
+# Determine most common K across replicates
+cluster_counts <- data.frame(
+	cluster_n = sapply(kmeans_res, function(x) length(unique(x$cluster))),
+	replicate = 1:kmeans_set
+)
+
+freq_table   <- table(cluster_counts$cluster_n)
+main_clust_n <- as.numeric(names(freq_table)[which.max(freq_table)])
+
+# Store as data frame for use in diagnostic report
+freq_df <- data.frame(
+	n_clusters = as.numeric(names(freq_table)),
+	freq       = as.numeric(freq_table)
+)
+
+cat("\nCluster number distribution across replicates:\n")
+print(freq_table)
+cat("\nSelected K =", main_clust_n, "clusters\n")
+stat_list$selected_k <- main_clust_n
+```
+
+## Standardize cluster number across replicates
+
+```{r}
+samples_to_rerun <- which(cluster_counts$cluster_n != main_clust_n)
+
+if (length(samples_to_rerun) > 0) {
+	cat("\nRerunning", length(samples_to_rerun),
+		"replicates with K =", main_clust_n, "\n")
+
+	for (i in samples_to_rerun) {
+		pca_sub         <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
+		kmeans_res[[i]] <- kmeans(pca_sub,
+								  centers  = main_clust_n,
+								  iter.max = iter_max,
+								  nstart   = nstart)
+	}
+}
+```
+
+# Apply clustering
+
+```{r}
+cat("\nRunning kmeans on full dataset with K =", main_clust_n, "\n")
+kmeans_full <- kmeans(pca_full_90,
+					  centers  = main_clust_n,
+					  iter.max = iter_max,
+					  nstart   = nstart)
+
+EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
+								   as.data.frame(kmeans_full$centers))
+
+# cluster_init is preserved through both the mutate(cluster = ...) in the
+# merge branch and orderClusters(), which only modifies the cluster column.
+EC_clean$cluster_init <- EC_clean$cluster
+
+cat("Assigned clusters to", nrow(EC_clean), "observations\n")
+```
+
+# Merge small clusters
+
+```{r}
+cluster_summary <- summaryClusters(EC_clean)
+
+cat("\nInitial cluster summary:\n")
+print(knitr::kable(cluster_summary[, c("cluster", "yft_catch", "yft_frac")],
+				   col.names = c("Cluster", "% Total Catch", "% YFT in Cluster"),
+				   digits = 1))
+
+small_clusters <- cluster_summary |>
+	filter(yft_catch < catch_threshold)
+
+if (nrow(small_clusters) > 0) {
+	cat("\nClusters below", catch_threshold, "% catch threshold:\n")
+	print(small_clusters$cluster)
+
+	main_clusters  <- cluster_summary |>
+		filter(yft_catch >= catch_threshold) |>
+		pull(cluster)
+
+	main_centroids <- as.data.frame(kmeans_full$centers)[main_clusters, ]
+
+	EC_clustered <- EC_clean |>
+		mutate(cluster = assignClusters(as.data.frame(pca_full),
+										main_centroids)) |>
+		orderClusters()
+
+	stat_list$n_clusters_final <- length(unique(EC_clustered$cluster))
+
+} else {
+	cat("\nNo clusters below threshold\n")
+	EC_clustered <- EC_clean |> orderClusters()
+	stat_list$n_clusters_final <- main_clust_n
+}
+
+cat("\nFinal number of clusters:", stat_list$n_clusters_final, "\n")
+```
+
+## Final cluster summary
+
+```{r}
+final_summary <- summaryClusters(EC_clustered)
+
+knitr::kable(
+	final_summary[, c("cluster", "yft_n", "total_n", "yft_catch", "yft_frac")],
+	format     = "simple",
+	col.names  = c("Cluster", "YFT Caught", "Total Catch",
+				   "% of Total", "% YFT in Cluster"),
+	caption    = "Final Cluster Summary",
+	digits     = c(0, 0, 0, 1, 1)
+)
+```
+
+# Save outputs
+
+The chunk below is reference-only (`eval=FALSE`) and does not run when this
+vignette is built.
+
+```{r, eval = FALSE}
+# EC_data_clustered.RDS: the clustered data frame.
+#   - cluster:      final cluster labels (post-merge, ordered by YFT fraction)
+#   - cluster_init: pre-merge labels (raw kmeans output, unordered)
+saveRDS(EC_clustered, here("outputs/EC_data_clustered.RDS"))
+
+# cluster_diagnostics.RDS: everything needed by the diagnostic report vignette.
+# Kept as a single list to avoid cluttering outputs/.
+cluster_diagnostics <- list(
+	pca_res                = pca_res,
+	pca_select             = pca_select,
+	pca_variance_threshold = pca_variance_threshold,
+	scenario               = scenario,
+	gap_stat               = gap_stat,
+	kmeans_res             = kmeans_res,
+	sample_indices         = sample_indices,
+	freq_df                = freq_df,
+	stat_list              = stat_list
+)
+saveRDS(cluster_diagnostics, here("outputs/cluster_diagnostics.RDS"))
+
+cat("\nClustering complete.\n")
+cat("  outputs/EC_data_clustered.RDS  — clustered data (cluster + cluster_init columns)\n")
+cat("  outputs/cluster_diagnostics.RDS — PCA, gap stats, kmeans results\n")
+```
