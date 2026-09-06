@@ -18,9 +18,11 @@ knitr::opts_chunk$set(
 
 ```{r setup}
 library(longlineTypology)
-library(dplyr)
-library(lubridate)
-library(here)
+
+## Base-R build: dplyr, lubridate and here are not required.
+## `outdir` replaces here("outputs").
+outdir <- file.path(getwd(), "outputs")
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 stat_list <- list()
 ```
@@ -49,26 +51,23 @@ stat_list$nrow_total <- nrow(EC_clean)
 
 ```{r}
 
-EC_clean <- EC_clean |>
-	mutate(
-		total_n      = yft_n + alb_n + bet_n,
-		yft_fraction = ifelse(total_n > 0, yft_n / total_n, 0),
-		alb_fraction = ifelse(total_n > 0, alb_n / total_n, 0),
-		bet_fraction = ifelse(total_n > 0, bet_n / total_n, 0)
-	) |>
-	rename(mean_hbf = hbf) |>
-	filter(!is.na(mean_hbf))
+EC_clean$total_n      <- EC_clean$yft_n + EC_clean$alb_n + EC_clean$bet_n
+EC_clean$yft_fraction <- ifelse(EC_clean$total_n > 0, EC_clean$yft_n / EC_clean$total_n, 0)
+EC_clean$alb_fraction <- ifelse(EC_clean$total_n > 0, EC_clean$alb_n / EC_clean$total_n, 0)
+EC_clean$bet_fraction <- ifelse(EC_clean$total_n > 0, EC_clean$bet_n / EC_clean$total_n, 0)
+names(EC_clean)[names(EC_clean) == "hbf"] <- "mean_hbf"
+EC_clean <- EC_clean[!is.na(EC_clean$mean_hbf), , drop = FALSE]
 ```
 
 # Define clustering parameters
 
 ```{r}
 # Clustering scenario: yellowfin, bigeye, albacore + hooks between floats
-scenario <- "yba_hbf"
+scenario <- "yba_lat"
 
 # PCA and kmeans parameters
 pca_variance_threshold <- 0.7   # Retain PCs explaining 70% of variance
-sample_no              <- 100   # Sample size per replicate for gap statistic
+sample_no              <- 20000 # Sample size per replicate for gap statistic
 kmeans_set             <- 15    # Number of kmeans replicates
 max_k                  <- 20    # Maximum number of clusters to test
 iter_max               <- 1e6   # Maximum iterations for kmeans
@@ -104,7 +103,7 @@ cat("PCA retained", pca_res$no_var, "components explaining >=",
 pca_full <- pca_res$x[, 1:pca_res$no_var]
 
 # Filter to post-1990 data for clustering
-indices_90  <- which(year(EC_clean$ymd) >= 1990)
+indices_90  <- which(as.integer(format(EC_clean$date, "%Y")) >= 1990)
 pca_full_90 <- pca_full[indices_90, ]
 
 cat("Using", nrow(pca_full_90), "observations from 1990 onwards for clustering\n")
@@ -209,29 +208,24 @@ print(knitr::kable(cluster_summary[, c("cluster", "yft_catch", "yft_frac")],
 				   col.names = c("Cluster", "% Total Catch", "% YFT in Cluster"),
 				   digits = 1))
 
-small_clusters <- cluster_summary |>
-	filter(yft_catch < catch_threshold)
+small_clusters <- cluster_summary[cluster_summary$yft_catch < catch_threshold, , drop = FALSE]
 
 if (nrow(small_clusters) > 0) {
 	cat("\nClusters below", catch_threshold, "% catch threshold:\n")
 	print(small_clusters$cluster)
 
-	main_clusters  <- cluster_summary |>
-		filter(yft_catch >= catch_threshold) |>
-		pull(cluster)
+	main_clusters  <- cluster_summary$cluster[cluster_summary$yft_catch >= catch_threshold]
 
 	main_centroids <- as.data.frame(kmeans_full$centers)[main_clusters, ]
 
-	EC_clustered <- EC_clean |>
-		mutate(cluster = assignClusters(as.data.frame(pca_full),
-										main_centroids)) |>
-		orderClusters()
+	EC_clean$cluster <- assignClusters(as.data.frame(pca_full), main_centroids)
+	EC_clustered     <- orderClusters(EC_clean)
 
 	stat_list$n_clusters_final <- length(unique(EC_clustered$cluster))
 
 } else {
 	cat("\nNo clusters below threshold\n")
-	EC_clustered <- EC_clean |> orderClusters()
+	EC_clustered <- orderClusters(EC_clean)
 	stat_list$n_clusters_final <- main_clust_n
 }
 
@@ -262,7 +256,7 @@ vignette is built.
 # EC_data_clustered.RDS: the clustered data frame.
 #   - cluster:      final cluster labels (post-merge, ordered by YFT fraction)
 #   - cluster_init: pre-merge labels (raw kmeans output, unordered)
-saveRDS(EC_clustered, here("outputs/EC_data_clustered.RDS"))
+saveRDS(EC_clustered, file.path(outdir, "EC_data_clustered.RDS"))
 
 # cluster_diagnostics.RDS: everything needed by the diagnostic report vignette.
 # Kept as a single list to avoid cluttering outputs/.
@@ -277,7 +271,7 @@ cluster_diagnostics <- list(
 	freq_df                = freq_df,
 	stat_list              = stat_list
 )
-saveRDS(cluster_diagnostics, here("outputs/cluster_diagnostics.RDS"))
+saveRDS(cluster_diagnostics, file.path(outdir, "cluster_diagnostics.RDS"))
 
 cat("\nClustering complete.\n")
 cat("  outputs/EC_data_clustered.RDS  — clustered data (cluster + cluster_init columns)\n")

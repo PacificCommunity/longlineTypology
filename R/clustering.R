@@ -1,4 +1,7 @@
-#' @importFrom rlang .data
+## Base-R build: no dplyr, no rlang, no factoextra. See BASE-R-CHANGES.md.
+utils::globalVariables(c("PC1", "PC2", "k", "gap", "sd", "pct", "x", "y",
+                         "contrib", "varname", "col", "label"))
+
 NULL
 
 
@@ -107,13 +110,20 @@ custom_scale <- function(x) {
 #' @family clustering utilities
 #' @export
 pcaScale <- function(select_dat, method = "zscore") {
-	switch(method,
-		   "zscore"  = select_dat |>
-			   dplyr::mutate(dplyr::across(dplyr::everything(), custom_scale)),
-		   "arcsine" = select_dat |>
-			   dplyr::mutate(dplyr::across(dplyr::everything(), ~asin(sqrt(.x)))),
-		   stop("Unknown scaling method: '", method, "'. Use 'zscore' or 'arcsine'.")
-	)
+	f <- switch(method,
+				"zscore"  = custom_scale,
+				"arcsine" = function(x) asin(sqrt(x)),
+				stop("Unknown scaling method: '", method,
+					 "'. Use 'zscore' or 'arcsine'."))
+	select_dat <- as.data.frame(select_dat)
+	bad <- !vapply(select_dat, is.numeric, logical(1))
+	if (any(bad))
+		stop("pcaScale() needs numeric columns; these are not: ",
+			 paste(names(select_dat)[bad], collapse = ", "))
+	## `x[] <- lapply(x, f)` is the base equivalent of
+	## mutate(across(everything(), f)): it preserves class, names and row names.
+	select_dat[] <- lapply(select_dat, f)
+	select_dat
 }
 
 
@@ -146,8 +156,7 @@ pcaScale <- function(select_dat, method = "zscore") {
 #' }
 #'
 #' @family clustering utilities
-#' @importFrom factoextra fviz_eig fviz_pca_var
-#' @importFrom ggplot2 ggplot aes geom_point geom_hline geom_vline geom_text geom_segment arrow unit labs theme_minimal
+#' @importFrom ggplot2 ggplot aes geom_point geom_hline geom_vline geom_text geom_segment geom_col geom_line geom_path scale_colour_identity coord_equal arrow unit labs theme_minimal
 #' @export
 customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 				  return_print = FALSE) {
@@ -164,19 +173,67 @@ customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 						  length(cumulative_var))
 	pca_res$no_var <- max(no_pca, 2)
 
-	p1 <- fviz_eig(pca_res)
-	p2 <- fviz_pca_var(pca_res,
-					   col.var      = "contrib",
-					   gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
-					   repel        = TRUE)
-	p3 <- ggplot(pca_scores, aes(x = .data$PC1, y = .data$PC2)) +
+	## --- scree plot: replaces factoextra::fviz_eig() -------------------------
+	scree <- data.frame(k = seq_along(variance_frac),
+						pct = variance_frac * 100)
+	p1 <- ggplot(scree, aes(x = factor(k), y = pct, group = 1)) +
+		geom_col(fill = "steelblue") +
+		geom_point() +
+		geom_line() +
+		geom_hline(yintercept = 0) +
+		labs(title = "Scree plot", x = "Principal component",
+			 y = "% of explained variance") +
+		theme_minimal()
+
+	## --- variable plot: replaces factoextra::fviz_pca_var() ------------------
+	## Correlation circle. `contrib` is the contribution of each variable to the
+	## PC1-PC2 plane, eigenvalue-weighted, as factoextra defines it.
+	e12 <- eigenvalues[1] + eigenvalues[2]
+	vars <- data.frame(
+		varname = rownames(loadings),
+		PC1     = loadings$PC1 * sqrt(eigenvalues[1]),
+		PC2     = loadings$PC2 * sqrt(eigenvalues[2]),
+		contrib = (loadings$PC1^2 * eigenvalues[1] +
+				   loadings$PC2^2 * eigenvalues[2]) / e12 * 100,
+		stringsAsFactors = FALSE)
+	## Colours are resolved here with grDevices::colorRampPalette() and fed
+	## through scale_colour_identity(), rather than scale_colour_gradientn().
+	## A continuous colour scale forces ggplot2 to load `farver` at plot
+	## CONSTRUCTION time, which fails on installs where farver predates R 4.0.
+	## Doing the interpolation ourselves keeps this function usable there.
+	pal <- grDevices::colorRampPalette(c("#00AFBB", "#E7B800", "#FC4E07"))(100)
+	rng <- range(vars$contrib)
+	idx <- if (diff(rng) > 0)
+		as.integer(round((vars$contrib - rng[1]) / diff(rng) * 99)) + 1L
+	else rep(50L, nrow(vars))
+	vars$col   <- pal[idx]
+	vars$label <- sprintf("%s (%.0f%%)", vars$varname, vars$contrib)
+
+	circ <- data.frame(x = cos(seq(0, 2 * pi, length.out = 200)),
+					   y = sin(seq(0, 2 * pi, length.out = 200)))
+	p2 <- ggplot(vars, aes(x = PC1, y = PC2)) +
+		geom_path(data = circ, aes(x = x, y = y),
+				  colour = "grey70", inherit.aes = FALSE) +
+		geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+		geom_vline(xintercept = 0, linetype = "dashed", color = "gray") +
+		geom_segment(aes(x = 0, y = 0, xend = PC1, yend = PC2, colour = col),
+					 arrow = arrow(length = unit(0.2, "cm"))) +
+		geom_text(aes(label = label), vjust = -0.6, size = 3) +
+		scale_colour_identity() +
+		coord_equal() +
+		labs(title = "Variables - PCA",
+			 x = sprintf("Dim1 (%.1f%%)", variance_frac[1] * 100),
+			 y = sprintf("Dim2 (%.1f%%)", variance_frac[2] * 100)) +
+		theme_minimal()
+
+	p3 <- ggplot(pca_scores, aes(x = PC1, y = PC2)) +
 		geom_point() +
 		geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
 		geom_vline(xintercept = 0, linetype = "dashed", color = "gray") +
 		geom_text(data = loadings, aes(label = rownames(loadings)),
 				  vjust = -0.5, hjust = -0.5) +
 		geom_segment(data = loadings,
-					 aes(x = 0, y = 0, xend = .data$PC1, yend = .data$PC2),
+					 aes(x = 0, y = 0, xend = PC1, yend = PC2),
 					 arrow = arrow(length = unit(0.2, "cm")), color = "red") +
 		labs(title = "PCA scatter plot",
 			 x = "Principal Component 1",
@@ -277,24 +334,34 @@ customTheme <- function(text_size = 11) {
 customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 						 nstart = 1, d.power = 2, print_it = TRUE) {
 
-	gap_stat <- cluster::clusGap(x = data_df, FUNcluster = kmeans,
-								 K.max = max_k, B = random_set,
-								 d.power = d.power, nstart = nstart,
-								 iter.max = iter_max)
+	## --- amended gap statistic: exact O(n), no dist() ----------------------
+	## The W_k identity holds only for squared Euclidean distance, so fall
+	## back to cluster::clusGap() for any other d.power.
+	if (d.power == 2) {
+		Tab <- fastClusGap(data_df, K.max = max_k, B = random_set,
+						   nstart = nstart, iter.max = iter_max,
+						   ncores = nb_cores)
+	} else {
+		Tab <- cluster::clusGap(x = data_df, FUNcluster = kmeans,
+								K.max = max_k, B = random_set,
+								d.power = d.power, nstart = nstart,
+								iter.max = iter_max)$Tab
+		attr(Tab, "k") <- seq_len(nrow(Tab))
+	}
 
-	nc <- cluster::maxSE(f    = gap_stat$Tab[, "gap"],
-						 SE.f = gap_stat$Tab[, "SE.sim"],
-						 method    = "Tibs2001SEmax",
-						 SE.factor = 1)
+	## selectK(), NOT maxSE(): maxSE returns a POSITION in the vector, which
+	## equals k only when the table starts at k = 1.
+	nc <- selectK(Tab)
 
-	plot_gap <- data.frame(k   = as.factor(1:max_k),
-						   gap = gap_stat$Tab[, 3],
-						   sd  = gap_stat$Tab[, 4])
+
+    plot_gap <- data.frame(k   = as.factor(attr(Tab, "k")),
+						   gap = Tab[, "gap"],
+						   sd  = Tab[, "SE.sim"])
 
 	p1 <- ggplot(plot_gap, aes(x = .data$k, y = .data$gap)) +
 		geom_point() +
 		geom_errorbar(aes(ymin = .data$gap - .data$sd, ymax = .data$gap + .data$sd)) +
-		geom_vline(xintercept = nc) +
+		geom_vline(xintercept = which(attr(Tab, "k") == nc)) +
 		customTheme()
 
 	if (print_it) print(p1)
@@ -307,7 +374,7 @@ customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 
 	return(list(
 		kmeans   = kmeans_res,
-		gap_stat = as.data.frame(gap_stat$Tab),
+		gap_stat = as.data.frame(Tab),
 		plot     = p1
 	))
 }
@@ -385,69 +452,76 @@ summaryClusters <- function(df) {
 	has_hbf <- "mean_hbf"  %in% names(df)
 	has_lat <- "latitude"  %in% names(df)
 
-	# Core per-date aggregation
-	daily <- df |>
-		dplyr::group_by(.data$cluster, .data$ymd) |>
-		dplyr::summarise(
-			yft_n   = sum(.data$yft_n),
-			E       = sum(.data$E),
-			total_n = sum(.data$yft_n) + sum(.data$bet_n) + sum(.data$alb_n),
-			.groups = "drop"
-		) |>
-		dplyr::mutate(CPUE = .data$yft_n / .data$E)
+	## --- helpers (base equivalents of group_by()/summarise()) ---------------
+	## Group keys are built once; rowsum() does the per-(cluster, date) sums in
+	## one pass, which is what makes this usable on the full 2e6-row dataset.
+	## reorder = FALSE keeps groups in order of first appearance, so the key
+	## columns can be recovered with !duplicated() instead of a string split.
+	key   <- paste(as.character(df$cluster), format(df$ymd), sep = "\r")
+	first <- !duplicated(key)
+	d_cluster <- df$cluster[first]      # keeps factor / integer class
+	d_ymd     <- df$ymd[first]          # keeps Date class
 
-	# Core cluster summary
-	result <- daily |>
-		dplyr::group_by(.data$cluster) |>
-		dplyr::summarise(
-			CPUE_min = min(.data$CPUE),
-			CPUE_max = max(.data$CPUE),
-			ymd_min  = min(.data$ymd),
-			ymd_max  = max(.data$ymd),
-			yft_n    = sum(.data$yft_n),
-			total_n  = sum(.data$total_n),
-			.groups  = "drop"
-		)
+	sums <- rowsum(as.matrix(df[, c("yft_n", "bet_n", "alb_n", "E")]),
+				   group = key, reorder = FALSE)
+	d_yft   <- sums[, "yft_n"]
+	d_tot   <- sums[, "yft_n"] + sums[, "bet_n"] + sums[, "alb_n"]
+	d_CPUE  <- sums[, "yft_n"] / sums[, "E"]
 
-	# Optional: length
+	## dplyr's summarise() returns groups in sorted order; match that.
+	lev <- sort(unique(d_cluster))
+	g   <- factor(d_cluster, levels = lev)
+	num <- function(x, f) vapply(split(x, g), f, numeric(1), USE.NAMES = FALSE)
+	## split() keeps the Date class, so min/max return Dates; c() reassembles.
+	dat <- function(x, f) do.call(c, lapply(split(x, g), f))
+
+	result <- data.frame(
+		cluster  = lev,
+		CPUE_min = num(d_CPUE, min),
+		CPUE_max = num(d_CPUE, max),
+		ymd_min  = dat(d_ymd, min),
+		ymd_max  = dat(d_ymd, max),
+		yft_n    = num(d_yft, sum),
+		total_n  = num(d_tot, sum),
+		stringsAsFactors = FALSE)
+
+	## Optional blocks: per-(cluster, date) mean, then range across dates.
+	## Computed on the same `lev` ordering, so they are cbind-ed directly
+	## rather than joined; match() guards the ordering regardless.
+	range_by_cluster <- function(values) {
+		m  <- rowsum(cbind(v = values, n = 1), group = key, reorder = FALSE)
+		mu <- m[, "v"] / m[, "n"]
+		gg <- factor(d_cluster, levels = lev)
+		lo <- vapply(split(mu, gg), min, numeric(1))
+		hi <- vapply(split(mu, gg), max, numeric(1))
+		list(lo = lo[match(lev, names(lo))], hi = hi[match(lev, names(hi))])
+	}
+
 	if (has_len) {
-		len_summary <- df |>
-			dplyr::group_by(.data$cluster, .data$ymd) |>
-			dplyr::summarise(mean_len = mean(.data$mean_len), .groups = "drop") |>
-			dplyr::group_by(.data$cluster) |>
-			dplyr::summarise(len_min = min(.data$mean_len), len_max = max(.data$mean_len),
-					  .groups = "drop")
-		result <- dplyr::left_join(result, len_summary, by = "cluster")
+		r <- range_by_cluster(df$mean_len)
+		result$len_min <- unname(r$lo); result$len_max <- unname(r$hi)
 	}
-
-	# Optional: hooks between floats
 	if (has_hbf) {
-		hbf_summary <- df |>
-			dplyr::group_by(.data$cluster, .data$ymd) |>
-			dplyr::summarise(mean_hbf = mean(.data$mean_hbf), .groups = "drop") |>
-			dplyr::group_by(.data$cluster) |>
-			dplyr::summarise(HBF_min = min(.data$mean_hbf), HBF_max = max(.data$mean_hbf),
-					  .groups = "drop")
-		result <- dplyr::left_join(result, hbf_summary, by = "cluster")
+		r <- range_by_cluster(df$mean_hbf)
+		result$HBF_min <- unname(r$lo); result$HBF_max <- unname(r$hi)
 	}
-
-	# Optional: latitude
 	if (has_lat) {
-		lat_summary <- df |>
-			dplyr::group_by(.data$cluster, .data$ymd) |>
-			dplyr::summarise(mean_lat = mean(stats::quantile(.data$latitude, c(0.01, 0.99))),
-					  .groups = "drop") |>
-			dplyr::group_by(.data$cluster) |>
-			dplyr::summarise(lat_min = min(.data$mean_lat), lat_max = max(.data$mean_lat),
-					  .groups = "drop")
-		result <- dplyr::left_join(result, lat_summary, by = "cluster")
+		## Preserved verbatim from the dplyr version: the per-date statistic is
+		## mean(quantile(latitude, c(0.01, 0.99))), i.e. a midrange of the 1st
+		## and 99th percentiles, not a mean latitude.
+		mid <- vapply(split(df$latitude, factor(key, levels = unique(key))),
+					  function(v) mean(stats::quantile(v, c(0.01, 0.99))),
+					  numeric(1))
+		gg <- factor(d_cluster, levels = lev)
+		lo <- vapply(split(mid, gg), min, numeric(1))
+		hi <- vapply(split(mid, gg), max, numeric(1))
+		result$lat_min <- unname(lo[match(lev, names(lo))])
+		result$lat_max <- unname(hi[match(lev, names(hi))])
 	}
 
-	result |>
-		dplyr::mutate(
-			yft_catch = .data$yft_n / sum(.data$yft_n) * 100,
-			yft_frac  = .data$yft_n / .data$total_n * 100
-		)
+	result$yft_catch <- result$yft_n / sum(result$yft_n) * 100
+	result$yft_frac  <- result$yft_n / result$total_n * 100
+	result
 }
 
 
@@ -464,27 +538,22 @@ summaryClusters <- function(df) {
 #'
 #' @examples
 #' \dontrun{
-#' EC_clustered <- EC_clean |>
-#'   dplyr::mutate(cluster = assignClusters(as.data.frame(pca_full),
-#'                                          as.data.frame(kmeans_full$centers))) |>
-#'   orderClusters()
+#' EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
+#'                                    as.data.frame(kmeans_full$centers))
+#' EC_clustered <- orderClusters(EC_clean)
 #' }
 #'
 #' @family clustering utilities
 #' @export
 orderClusters <- function(df) {
-	order <- df |>
-		dplyr::group_by(.data$cluster) |>
-		dplyr::summarise(yft_n   = sum(.data$yft_n),
-				  total_n = sum(.data$total_n),
-				  .groups = "drop") |>
-		dplyr::mutate(yft_frac  = .data$yft_n / .data$total_n) |>
-		dplyr::arrange(dplyr::desc(.data$yft_frac)) |>
-		dplyr::mutate(new_clust = dplyr::row_number()) |>
-		dplyr::select(.data$cluster, .data$new_clust)
-
-	df |>
-		dplyr::left_join(order, by = "cluster") |>
-		dplyr::mutate(cluster = factor(.data$new_clust, levels = order$new_clust)) |>
-		dplyr::select(-.data$new_clust)
+	lev  <- sort(unique(df$cluster))
+	g    <- factor(df$cluster, levels = lev)
+	yft  <- vapply(split(df$yft_n,   g), sum, numeric(1))
+	tot  <- vapply(split(df$total_n, g), sum, numeric(1))
+	frac <- yft / tot
+	## order() is stable, matching dplyr::arrange(desc(.))
+	old_ids <- lev[order(frac, decreasing = TRUE)]
+	new_ids <- seq_along(old_ids)
+	df$cluster <- factor(new_ids[match(df$cluster, old_ids)], levels = new_ids)
+	df
 }
