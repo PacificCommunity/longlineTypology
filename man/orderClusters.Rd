@@ -20,10 +20,9 @@ consistent, interpretable ordering across runs.
 }
 \examples{
 \dontrun{
-EC_clustered <- EC_clean |>
-  dplyr::mutate(cluster = assignClusters(as.data.frame(pca_full),
-                                         as.data.frame(kmeans_full$centers))) |>
-  orderClusters()
+EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
+                                   as.data.frame(kmeans_full$centers))
+EC_clustered <- orderClusters(EC_clean)
 }
 
 }

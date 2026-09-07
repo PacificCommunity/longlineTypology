@@ -75,7 +75,7 @@ selectScenario <- function(scenario) {
 # Z-score scaling with zero-variance handling.
 # If all values are identical, centres to zero instead of dividing by zero.
 custom_scale <- function(x) {
-	if (var(x, na.rm = TRUE) == 0) {
+	if (stats::var(x, na.rm = TRUE) == 0) {
 		return(x - mean(x, na.rm = TRUE))
 	} else {
 		return(as.numeric(scale(x)))
@@ -160,7 +160,7 @@ pcaScale <- function(select_dat, method = "zscore") {
 #' @export
 customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 				  return_print = FALSE) {
-	pca_res    <- prcomp(data_df, scale. = FALSE)
+	pca_res    <- stats::prcomp(data_df, scale. = FALSE)
 	pca_scores <- as.data.frame(pca_res$x)
 	loadings   <- as.data.frame(pca_res$rotation)
 
@@ -309,6 +309,11 @@ customTheme <- function(text_size = 11) {
 #'   statistic computation. Default is 2 (squared Euclidean).
 #' @param print_it Logical; if `TRUE`, prints the gap statistic plot. Default
 #'   is `TRUE`.
+#' @param ncores Integer; number of cores passed through to
+#'   [fastClusGap()]'s `ncores` argument for the reference-dataset bootstrap
+#'   (embarrassingly parallel via `parallel::mclapply()`). Default 1
+#'   (serial). Unix-alikes only -- on Windows, values > 1 warn and fall back
+#'   to serial execution.
 #'
 #' @return A named list with three elements:
 #' \describe{
@@ -332,7 +337,7 @@ customTheme <- function(text_size = 11) {
 #' @importFrom ggplot2 ggplot aes geom_point geom_errorbar geom_vline
 #' @export
 customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
-						 nstart = 1, d.power = 2, print_it = TRUE) {
+						 nstart = 1, d.power = 2, print_it = TRUE, ncores = 1) {
 
 	## --- amended gap statistic: exact O(n), no dist() ----------------------
 	## The W_k identity holds only for squared Euclidean distance, so fall
@@ -340,9 +345,9 @@ customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 	if (d.power == 2) {
 		Tab <- fastClusGap(data_df, K.max = max_k, B = random_set,
 						   nstart = nstart, iter.max = iter_max,
-						   ncores = nb_cores)
+						   ncores = ncores)
 	} else {
-		Tab <- cluster::clusGap(x = data_df, FUNcluster = kmeans,
+		Tab <- cluster::clusGap(x = data_df, FUNcluster = stats::kmeans,
 								K.max = max_k, B = random_set,
 								d.power = d.power, nstart = nstart,
 								iter.max = iter_max)$Tab
@@ -369,7 +374,7 @@ customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 	cat("Best K =", nc, "\n")
 	if (nc == max_k) cat("Selected K is max K\n")
 
-	kmeans_res <- kmeans(data_df, centers = nc,
+	kmeans_res <- stats::kmeans(data_df, centers = nc,
 						 iter.max = iter_max, nstart = nstart)
 
 	return(list(

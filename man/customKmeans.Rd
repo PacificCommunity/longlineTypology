@@ -11,7 +11,8 @@ customKmeans(
   iter_max = 10,
   nstart = 1,
   d.power = 2,
-  print_it = TRUE
+  print_it = TRUE,
+  ncores = 1
 )
 }
 \arguments{
@@ -34,6 +35,12 @@ statistic computation. Default is 2 (squared Euclidean).}
 
 \item{print_it}{Logical; if \code{TRUE}, prints the gap statistic plot. Default
 is \code{TRUE}.}
+
+\item{ncores}{Integer; number of cores passed through to
+\code{\link[=fastClusGap]{fastClusGap()}}'s \code{ncores} argument for the reference-dataset bootstrap
+(embarrassingly parallel via \code{parallel::mclapply()}). Default 1
+(serial). Unix-alikes only -- on Windows, values > 1 warn and fall back
+to serial execution.}
 }
 \value{
 A named list with three elements:

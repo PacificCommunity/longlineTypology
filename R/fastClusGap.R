@@ -29,12 +29,40 @@
 ##   fastClusGap       n = 20,000  ~2.3 min ; n = 100,000  ~12 min ; linear in n
 ##   speed-up at n = 20,000: 9x, and it grows proportionally to n thereafter.
 
+#' Compute W_k for one candidate cluster count
+#'
+#' Internal helper for [fastClusGap()]. Returns the pooled within-cluster
+#' sum of squares that `cluster::clusGap()`'s internal `W.k()` computes from
+#' the full pairwise distance matrix when `d.power = 2`, obtained instead via
+#' the identity `W_k = 0.5 * kmeans(...)$tot.withinss`. At `k = 1` this is
+#' computed directly (no clustering needed) as `0.5 * sum((X - colMeans(X))^2)`.
+#'
+#' @param X numeric matrix or data frame.
+#' @param k integer; number of clusters.
+#' @param nstart passed to [stats::kmeans()].
+#' @param iter.max passed to [stats::kmeans()].
+#'
+#' @return Numeric scalar, `W_k` on its original scale (not logged; callers
+#'   take `log()` of the result themselves, see [fastClusGap()]).
+#' @keywords internal
 Wk_fast <- function(X, k, nstart = 1L, iter.max = 30L) {
 	if (k == 1L) 0.5 * sum(sweep(X, 2L, colMeans(X))^2)
 	else 0.5 * stats::kmeans(X, k, nstart = nstart, iter.max = iter.max)$tot.withinss
 }
 
 #' Drop-in replacement for cluster::clusGap() when d.power = 2
+#'
+#' Exact replacement for `cluster::clusGap()` for the `FUNcluster = kmeans`,
+#' `d.power = 2` case used by `customKmeans()`. `clusGap()` computes `W_k` by
+#' building the full pairwise distance matrix of every cluster, for every
+#' candidate `k`, for the real data and for each of the `B` reference
+#' datasets -- O(n^2) in time and memory. This function instead uses the
+#' identity `W_k = 0.5 * kmeans(...)$tot.withinss` (see [Wk_fast()]), which
+#' `kmeans()` has already computed, making the whole call linear in `n`. The
+#' identity holds only for `d.power = 2` -- see [checkWkIdentity()] to verify
+#' it on your own data. Returns the same four-column table as
+#' `clusGap()$Tab`; read the cluster count off it with [selectK()], not
+#' `cluster::maxSE()` directly.
 #'
 #' @param x        numeric matrix or data frame (e.g. the retained PCA scores)
 #' @param K.max    largest k to test
@@ -55,6 +83,15 @@ Wk_fast <- function(X, k, nstart = 1L, iter.max = 30L) {
 #'                 to interactive(), matching clusGap's own default.
 #' @return matrix with columns logW, E.logW, gap, SE.sim (as clusGap()$Tab) plus
 #'         an attribute "k" giving the k value of each row.
+#'
+#' @examples
+#' set.seed(1)
+#' x <- rbind(matrix(rnorm(100, sd = 0.3), ncol = 2),
+#'            matrix(rnorm(100, mean = 4, sd = 0.3), ncol = 2))
+#' Tab <- fastClusGap(x, K.max = 5, B = 20, verbose = FALSE)
+#' selectK(Tab)
+#'
+#' @export
 fastClusGap <- function(x, K.max, B = 100L, nstart = 1L, iter.max = 30L,
 						k.min = 1L, ncores = 1L, verbose = interactive()) {
 	x <- as.matrix(x); n <- nrow(x)
@@ -152,15 +189,33 @@ fastClusGap <- function(x, K.max, B = 100L, nstart = 1L, iter.max = 30L,
 	out
 }
 
-#' Apply the Tibshirani 2001 SEmax rule and return the NUMBER OF CLUSTERS
+#' Apply the Tibshirani (2001) SE-max rule to a fastClusGap() table
 #'
-#' WARNING, and the reason this wrapper exists: cluster::maxSE() returns a
-#' POSITION in the vector it is given, not a k. customKmeans() gets away with
-#'   nc <- cluster::maxSE(gap_stat$Tab[, "gap"], ...)
-#' only because clusGap always starts at k = 1, so position == k. If you set
-#' k.min = 2 to skip the expensive k = 1 call, position and k differ by one and
-#' that line silently returns the wrong number of clusters. Always go through
-#' selectK() rather than calling maxSE() on the table directly.
+#' Wraps `cluster::maxSE()` and returns the actual number of clusters `k`,
+#' not a row position. `cluster::maxSE()` returns a POSITION in the vector
+#' it is given: `customKmeans()` gets away with
+#' `nc <- cluster::maxSE(gap_stat$Tab[, "gap"], ...)` only because
+#' `clusGap()` always starts at `k = 1`, so position and `k` coincide. If
+#' [fastClusGap()] was called with `k.min > 1` to skip the expensive `k = 1`
+#' case, position and `k` differ by one, and calling `maxSE()` directly on
+#' the table would silently return the wrong cluster count. Always go
+#' through this function instead of calling `cluster::maxSE()` on the table
+#' directly.
+#'
+#' @param Tab matrix returned by [fastClusGap()], with a `"k"` attribute (or,
+#'   failing that, `k` values given by `rownames(Tab)`).
+#' @param SE.factor passed to `cluster::maxSE(..., SE.factor = )`. Default 1.
+#'
+#' @return Integer; the selected number of clusters.
+#'
+#' @examples
+#' set.seed(1)
+#' x <- rbind(matrix(rnorm(100, sd = 0.3), ncol = 2),
+#'            matrix(rnorm(100, mean = 4, sd = 0.3), ncol = 2))
+#' Tab <- fastClusGap(x, K.max = 5, B = 20, verbose = FALSE)
+#' selectK(Tab)
+#'
+#' @export
 selectK <- function(Tab, SE.factor = 1) {
 	ks <- attr(Tab, "k"); if (is.null(ks)) ks <- as.integer(rownames(Tab))
 	i  <- cluster::maxSE(f = Tab[, "gap"], SE.f = Tab[, "SE.sim"],
@@ -168,8 +223,30 @@ selectK <- function(Tab, SE.factor = 1) {
 	ks[i]
 }
 
-#' Self-test: confirm the identity on YOUR data before trusting any of this.
-#' Returns TRUE invisibly, or stops. Cheap only for small n (it calls dist()).
+#' Verify the fastClusGap() W_k identity on your own data
+#'
+#' Self-test confirming, on the data supplied, that the pairwise-distance
+#' computation `cluster::clusGap()` uses internally (`0.5 * sum(dist(x_i,
+#' mu_r)^2)` per cluster) matches `0.5 * kmeans(...)$tot.withinss` -- the
+#' identity [fastClusGap()] relies on to avoid ever building that distance
+#' matrix. Cheap only for small `n`, since it calls `stats::dist()`;
+#' subsamples to at most 5000 rows if `X` is larger. Run once per
+#' dataset/scenario before trusting [fastClusGap()]'s output on it, not as
+#' part of a routine pipeline.
+#'
+#' @param X numeric matrix or data frame.
+#' @param k integer; number of clusters to test. Default 5.
+#' @param tol numeric; tolerance passed to `all.equal()`. Default 1e-8.
+#'
+#' @return Invisibly `TRUE` if the identity holds to within `tol`; stops
+#'   (via `stopifnot()`) otherwise. Also prints both computed values.
+#'
+#' @examples
+#' set.seed(1)
+#' x <- matrix(rnorm(200), ncol = 2)
+#' checkWkIdentity(x, k = 3)
+#'
+#' @export
 checkWkIdentity <- function(X, k = 5L, tol = 1e-8) {
 	X <- as.matrix(X)
 	if (nrow(X) > 5000L) X <- X[sample.int(nrow(X), 5000L), , drop = FALSE]
