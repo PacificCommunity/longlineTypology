@@ -73,6 +73,7 @@ max_k                  <- 20    # Maximum number of clusters to test
 iter_max               <- 1e6   # Maximum iterations for kmeans
 nstart                 <- 10    # Number of random starts for kmeans
 B_var                  <- 25    # Bootstrap replicates for gap statistic
+ncores				   <- 10	# Number of cores used by fastClusGap (Unix only)
 
 # Cluster merging parameters
 catch_threshold <- 3            # Merge clusters with < 3% of total catch
@@ -133,7 +134,8 @@ for (i in 1:kmeans_set) {
 						iter_max   = iter_max,
 						nstart     = nstart,
 						d.power    = 2,
-						print_it   = FALSE)
+						print_it   = FALSE,
+						ncores     = ncores)
 
 	kmeans_res[[i]] <- res$kmeans
 	gap_stat[[i]]   <- res$gap_stat

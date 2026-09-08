@@ -312,7 +312,7 @@ customTheme <- function(text_size = 11) {
 #' @param ncores Integer; number of cores passed through to
 #'   [fastClusGap()]'s `ncores` argument for the reference-dataset bootstrap
 #'   (embarrassingly parallel via `parallel::mclapply()`). Default 1
-#'   (serial). Unix-alikes only -- on Windows, values > 1 warn and fall back
+#'   (serial). Unix-alikes only, on Windows, values > 1 warn and fall back
 #'   to serial execution.
 #'
 #' @return A named list with three elements:
