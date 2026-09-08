@@ -67,7 +67,7 @@ scenario <- "yba_lat"
 
 # PCA and kmeans parameters
 pca_variance_threshold <- 0.7   # Retain PCs explaining 70% of variance
-sample_no              <- 20000 # Sample size per replicate for gap statistic
+sample_no              <- 100 # Sample size per replicate for gap statistic
 kmeans_set             <- 15    # Number of kmeans replicates
 max_k                  <- 20    # Maximum number of clusters to test
 iter_max               <- 1e6   # Maximum iterations for kmeans
@@ -103,7 +103,7 @@ cat("PCA retained", pca_res$no_var, "components explaining >=",
 pca_full <- pca_res$x[, 1:pca_res$no_var]
 
 # Filter to post-1990 data for clustering
-indices_90  <- which(as.integer(format(EC_clean$date, "%Y")) >= 1990)
+indices_90  <- which(as.integer(format(EC_clean$ymd, "%Y")) >= 1990)
 pca_full_90 <- pca_full[indices_90, ]
 
 cat("Using", nrow(pca_full_90), "observations from 1990 onwards for clustering\n")
