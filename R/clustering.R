@@ -120,9 +120,21 @@ pcaScale <- function(select_dat, method = "zscore") {
 	if (any(bad))
 		stop("pcaScale() needs numeric columns; these are not: ",
 			 paste(names(select_dat)[bad], collapse = ", "))
-	## `x[] <- lapply(x, f)` is the base equivalent of
-	## mutate(across(everything(), f)): it preserves class, names and row names.
+
+	scale_params <- if (method == "zscore") {
+		data.frame(
+			variable = names(select_dat),
+			mean     = vapply(select_dat, mean, numeric(1), na.rm = TRUE),
+			sd       = vapply(select_dat, function(x) {
+				s <- stats::sd(x, na.rm = TRUE)
+				if (is.na(s) || s == 0) 1 else s   # matches custom_scale()'s zero-variance branch
+			}, numeric(1)),
+			row.names = NULL
+		)
+	} else NULL   # arcsine has no linear params to save
+
 	select_dat[] <- lapply(select_dat, f)
+	attr(select_dat, "scale_params") <- scale_params
 	select_dat
 }
 
@@ -560,5 +572,78 @@ orderClusters <- function(df) {
 	old_ids <- lev[order(frac, decreasing = TRUE)]
 	new_ids <- seq_along(old_ids)
 	df$cluster <- factor(new_ids[match(df$cluster, old_ids)], levels = new_ids)
+	df
+}
+
+#' Number of PCA components to retain from species count in a scenario
+#'
+#' Resolves `scenario` via [selectScenario()] and counts how many of the
+#' resulting columns are species-fraction variables (`yft_fraction`,
+#' `bet_fraction`, `alb_fraction`, `skj_fraction`, `oth_fraction`). Returns
+#' that count minus one, floored at `min_components`.
+#'
+#' @param scenario Character string, as passed to [selectScenario()].
+#' @param min_components Integer; minimum value returned regardless of the
+#'   species count. Default 2.
+#'
+#' @return Integer number of components to retain.
+#'
+#' @examples
+#' nSpeciesComponents("yba_lat")   # 3 species -> 2
+#' nSpeciesComponents("sp_hbf")    # 4 species -> 3
+#'
+#' @family clustering utilities
+#' @export
+nSpeciesComponents <- function(scenario, min_components = 2) {
+	species_cols <- c("yft_fraction", "bet_fraction", "alb_fraction",
+					  "skj_fraction", "oth_fraction")
+	resolved  <- selectScenario(scenario)
+	n_species <- length(intersect(resolved, species_cols))
+	n_out     <- n_species - 1L
+	if (n_out < min_components) {
+		message("nSpeciesComponents(): n_species - 1 = ", n_out,
+				" is below min_components = ", min_components,
+				"; using ", min_components, " instead.")
+		n_out <- min_components
+	}
+	n_out
+}
+
+#' Recompute species fractions scoped to the species used in a scenario
+#'
+#' Overwrites `total_n` and the relevant `*_fraction` columns so that,
+#' within each row, the fractions of the species present in `scenario` sum
+#' to 1. Species not referenced by `scenario` are left untouched.
+#'
+#' @param df A dataframe with `*_n` count columns for each species
+#'   (`yft_n`, `bet_n`, `alb_n`, `skj_n`, `oth_n`).
+#' @param scenario Character string, as passed to [selectScenario()].
+#'
+#' @return `df` with `total_n` and the scenario's `*_fraction` columns
+#'   recomputed.
+#'
+#' @family clustering utilities
+#' @export
+recalcSpeciesFractions <- function(df, scenario) {
+	species_cols <- c("yft_fraction", "bet_fraction", "alb_fraction",
+					  "skj_fraction", "oth_fraction")
+	resolved  <- selectScenario(scenario)
+	frac_cols <- intersect(resolved, species_cols)
+	if (length(frac_cols) == 0) {
+		message("recalcSpeciesFractions(): no species tokens in scenario '",
+				scenario, "'; leaving fractions and total_n unchanged.")
+		return(df)
+	}
+	n_cols <- sub("_fraction$", "_n", frac_cols)
+	missing_n <- setdiff(n_cols, names(df))
+	if (length(missing_n) > 0)
+		stop("recalcSpeciesFractions(): missing count column(s): ",
+			 paste(missing_n, collapse = ", "))
+
+	df$total_n <- rowSums(df[, n_cols, drop = FALSE])
+	for (i in seq_along(frac_cols)) {
+		df[[frac_cols[i]]] <- ifelse(df$total_n > 0,
+									 df[[n_cols[i]]] / df$total_n, 0)
+	}
 	df
 }

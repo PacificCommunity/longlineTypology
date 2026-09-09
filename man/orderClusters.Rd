@@ -31,7 +31,9 @@ Other clustering utilities:
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customKmeans]{customKmeans()}},
 \code{\link[=customPCA]{customPCA()}},
+\code{\link[=nSpeciesComponents]{nSpeciesComponents()}},
 \code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=recalcSpeciesFractions]{recalcSpeciesFractions()}},
 \code{\link[=selectScenario]{selectScenario()}},
 \code{\link[=summaryClusters]{summaryClusters()}}
 }

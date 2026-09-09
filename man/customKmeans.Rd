@@ -39,7 +39,7 @@ is \code{TRUE}.}
 \item{ncores}{Integer; number of cores passed through to
 \code{\link[=fastClusGap]{fastClusGap()}}'s \code{ncores} argument for the reference-dataset bootstrap
 (embarrassingly parallel via \code{parallel::mclapply()}). Default 1
-(serial). Unix-alikes only -- on Windows, values > 1 warn and fall back
+(serial). Unix-alikes only, on Windows, values > 1 warn and fall back
 to serial execution.}
 }
 \value{
@@ -70,8 +70,10 @@ res$plot            # diagnostic plot
 Other clustering utilities:
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customPCA]{customPCA()}},
+\code{\link[=nSpeciesComponents]{nSpeciesComponents()}},
 \code{\link[=orderClusters]{orderClusters()}},
 \code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=recalcSpeciesFractions]{recalcSpeciesFractions()}},
 \code{\link[=selectScenario]{selectScenario()}},
 \code{\link[=summaryClusters]{summaryClusters()}}
 }

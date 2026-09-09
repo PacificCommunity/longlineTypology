@@ -48,8 +48,10 @@ pca_scores <- pca_res$x[, 1:pca_res$no_var]
 Other clustering utilities:
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customKmeans]{customKmeans()}},
+\code{\link[=nSpeciesComponents]{nSpeciesComponents()}},
 \code{\link[=orderClusters]{orderClusters()}},
 \code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=recalcSpeciesFractions]{recalcSpeciesFractions()}},
 \code{\link[=selectScenario]{selectScenario()}},
 \code{\link[=summaryClusters]{summaryClusters()}}
 }

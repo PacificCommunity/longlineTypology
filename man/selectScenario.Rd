@@ -43,8 +43,10 @@ Other clustering utilities:
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customKmeans]{customKmeans()}},
 \code{\link[=customPCA]{customPCA()}},
+\code{\link[=nSpeciesComponents]{nSpeciesComponents()}},
 \code{\link[=orderClusters]{orderClusters()}},
 \code{\link[=pcaScale]{pcaScale()}},
+\code{\link[=recalcSpeciesFractions]{recalcSpeciesFractions()}},
 \code{\link[=summaryClusters]{summaryClusters()}}
 }
 \concept{clustering utilities}
