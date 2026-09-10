@@ -22,6 +22,14 @@
 ##    self-consistent (baseline and observed values are biased the same way),
 ##    but the distances are not true Haversine km and "Centroid_Distance" in
 ##    any output table is mislabelled. Not fixed here -- flagging it.
+##  - Segment classification compares each segment's slope to
+##    sd(smoothed segment) * slope_magnitude_threshold. LOESS smoothing
+##    crushes residual variance on flat segments far from any real change,
+##    so that threshold can shrink enough for a negligible residual slope to
+##    read as "increasing"/"decreasing" instead of "stable" -- which blocks
+##    the stable-to-stable candidate rule for that segment entirely. Seen on
+##    a clean synthetic level shift (see test-breakpoints.R history). Not
+##    fixed here -- carried over unchanged from breakpointAnalysis().
 
 
 # ---- age validation ---------------------------------------------------
@@ -49,9 +57,8 @@ ageFromLength <- function(length_cm, Linf = 150.3, K = 0.442, t0 = -0.244) {
 	if (any(over, na.rm = TRUE))
 		warning("ageFromLength(): ", sum(over, na.rm = TRUE),
 				" length(s) >= Linf (", Linf, "); returning NA for those.")
-	age <- t0 - log(1 - length_cm / Linf) / K * 365   # t0 left un-scaled -- see file header
-	age[over] <- NA
-	age
+	ratio <- ifelse(over, NA_real_, 1 - length_cm / Linf)  # avoid log() of <= 0 -> spurious "NaNs produced"
+	t0 - log(ratio) / K * 365
 }
 
 #' Test whether breakpoints are consistent with cohort ageing
@@ -162,6 +169,13 @@ calculateSpatialOverlap <- function(points1, points2, cell_size = 1) {
 
 	lon_breaks <- seq(min_lon, max_lon, by = cell_size)
 	lat_breaks <- seq(min_lat, max_lat, by = cell_size)
+	## seq() over an extent smaller than cell_size returns a single break, which
+	## leaves no valid bin at all below (findInterval()'s "valid" test needs
+	## index < length(breaks), impossible with only one break) -- every point
+	## then gets discarded and any two point sets, even identical ones, come
+	## back with overlap 0. Guarantee at least one real bin.
+	if (length(lon_breaks) < 2) lon_breaks <- c(min_lon, max_lon + cell_size)
+	if (length(lat_breaks) < 2) lat_breaks <- c(min_lat, max_lat + cell_size)
 
 	assign_to_grid <- function(points) {
 		n_cells <- length(lon_breaks) * length(lat_breaks)
@@ -543,7 +557,13 @@ analyseBreakpoints <- function(dates, x, mean_len, df, cluster_id, skip_age = FA
 							   window_months = 6, Linf = 150.3, K = 0.442, t0 = -0.244,
 							   movement_strictness = "moderate", ...) {
 	detected <- detectChangepoints(dates, x, ...)
-	if (is.null(detected) || length(detected$bp_dates) == 0) return(detected)
+	if (is.null(detected)) return(NULL)
+	if (length(detected$bp_dates) == 0)
+		return(data.frame(bp_date = as.Date(character()), age_limit_days = numeric(),
+						  phase_days = numeric(), passed_age = logical(),
+						  centroid_distance = numeric(), spatial_overlap = numeric(),
+						  spread_change_ratio = numeric(), passed_spatial = logical(),
+						  valid = logical()))
 
 	age <- validateBreakpointAge(detected$bp_dates, dates, mean_len, max(dates),
 								 window_months = window_months, skip = skip_age, Linf = Linf, K = K, t0 = t0)
