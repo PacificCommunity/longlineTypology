@@ -572,6 +572,7 @@ orderClusters <- function(df) {
 	old_ids <- lev[order(frac, decreasing = TRUE)]
 	new_ids <- seq_along(old_ids)
 	df$cluster <- factor(new_ids[match(df$cluster, old_ids)], levels = new_ids)
+	attr(df, "old_ids") <- old_ids
 	df
 }
 

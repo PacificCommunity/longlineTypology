@@ -25,7 +25,8 @@ Imports:
     graphics,
     grDevices,
     parallel,
-    utils
+    utils,
+    changepoint
 Suggests: 
     knitr,
     rmarkdown,
