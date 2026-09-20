@@ -44,6 +44,7 @@ selectScenario <- function(scenario) {
 		skj    = "skj_fraction",
 		oth    = "oth_fraction",
 		yba    = c("yft_fraction", "bet_fraction", "alb_fraction"),
+		ybas    = c("yft_fraction", "bet_fraction", "alb_fraction", "skj_fraction"),
 		sp     = c("yft_fraction", "bet_fraction", "alb_fraction", "oth_fraction"),
 		len    = "mean_len",
 		lens   = "sd_len",
