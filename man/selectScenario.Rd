@@ -24,7 +24,7 @@ selects yellowfin, bigeye, and albacore fractions plus hooks between floats.
 Available tokens:
 \describe{
 \item{Species fractions}{\code{yft}, \code{bet}, \code{alb}, \code{skj}, \code{oth},
-\code{yba} (yft + bet + alb), \code{sp} (yft + bet + alb + oth)}
+\code{yba} (yft + bet + alb), \code{sp} (yft + bet + alb + oth), \code{ybas} (yft + bet + alb + skj)}
 \item{Length}{\code{len} (mean), \code{lens} (sd), \code{lenAll} (mean + sd)}
 \item{Gear}{\code{hbf} (mean hooks between floats), \code{hbfC} (categorised)}
 \item{Location}{\code{lat}, \code{latabs}, \code{lat7.5}, \code{lon}, \code{bat}, \code{batC}}
