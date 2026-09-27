@@ -17,14 +17,21 @@
 ##      Bertalanffy age at the local mean length) or a fixed number of months
 ##      (HBF: 12 by default in analyseClusterBreakpoints()):
 ##        pulse fits better and tau <= transient_tau_frac * T_c -> "transient"
-##        d_hi <= T_c   -> abrupt, then (if spatial data given)
-##                         flag mix changed more than usual     -> "composition"
-##                         else same flags moved more than usual -> "relocation"
-##                         else                                  -> "unexplained"
 ##        d_lo >  T_c   -> "gradual"
-##        otherwise     -> "ambiguous"
-##   4. analyseClusterBreakpoints() also marks changes found at the same time
-##      in most clusters ("common": data / reporting events, not clustering).
+##        d_hi <= T_c   -> "abrupt"; d_lo <= T_c < d_hi -> "ambiguous"
+##      then, for abrupt AND ambiguous changes (if spatial data given):
+##        flag mix changed more than usual     -> "composition"
+##        else same flags moved more than usual -> "relocation"
+##        else abrupt -> "unexplained" (ambiguous stays "ambiguous")
+##   4. analyseClusterBreakpoints() (needs all clusters):
+##      - "composition" changes whose flag gains / losses are mirrored by
+##        another cluster at the same time -> "switch" (rows moving between
+##        clusters: the clustering-relevant signal). Not mirrored = the
+##        cluster's membership changed for another reason (fleet entering /
+##        leaving the fishery): stays "composition".
+##      - changes found at the same time in most clusters -> common = TRUE
+##        (data / reporting events). Composition / switch changes are never
+##        common and do not count towards it.
 
 utils::globalVariables(c("x", "start_date", "end_plot", "lab"))
 
@@ -314,12 +321,13 @@ analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
 			ch$comp_change[i] <- sp$comp_change; ch$p_comp[i]  <- sp$p_comp
 			ch$reloc_km[i]    <- sp$reloc_km;    ch$p_reloc[i] <- sp$p_reloc
 		}
-		ab <- ch$class == "abrupt"
+		ab   <- ch$class == "abrupt"
+		fast <- ab | ch$class == "ambiguous"   # abrupt, or possibly abrupt
 		comp_sig  <- !is.na(ch$p_comp)  & ch$p_comp  < spatial_alpha
 		reloc_sig <- !is.na(ch$p_reloc) & ch$p_reloc < spatial_alpha
-		ch$label[ab & comp_sig]               <- "composition"
-		ch$label[ab & !comp_sig & reloc_sig]  <- "relocation"
-		ch$label[ab & !comp_sig & !reloc_sig] <- "unexplained"
+		ch$label[fast & comp_sig]               <- "composition"
+		ch$label[fast & !comp_sig & reloc_sig]  <- "relocation"
+		ch$label[ab   & !comp_sig & !reloc_sig] <- "unexplained"
 	}
 	out <- ch[order(ch$s_hat), names(empty)]
 	rownames(out) <- NULL
@@ -331,7 +339,11 @@ analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
 #' A change is "common" if, for the same variable, at least
 #' `ceiling(min_share * n_clusters)` clusters (and at least 2) have a change
 #' starting within `tol_months` of it. Such changes point to data or
-#' reporting events rather than to the clustering.
+#' reporting events rather than to the clustering. Changes labelled
+#' "composition" or "switch" (the cluster's membership changed) are never
+#' common and are not counted: a reporting event does not change which flags
+#' are in a cluster, and rows moving between clusters change several
+#' clusters at once, which would otherwise pass as common (always, at K = 2).
 #'
 #' @param bp Output of [analyseClusterBreakpoints()] (columns `cluster`,
 #'   `variable`, `start_date`).
@@ -346,11 +358,40 @@ flagCommonBreaks <- function(bp, n_clusters, tol_months = 6, min_share = 0.75) {
 	need <- max(2, ceiling(min_share * n_clusters))
 	if (nrow(bp) == 0 || n_clusters < 2) return(bp)
 	mi <- .bpMonthIdx(bp$start_date)
-	for (i in seq_len(nrow(bp))) {
-		same <- bp$variable == bp$variable[i] & abs(mi - mi[i]) <= tol_months
+	eligible <- if (is.null(bp$label)) rep(TRUE, nrow(bp)) else !(bp$label %in% c("composition", "switch"))
+	for (i in which(eligible)) {
+		same <- eligible & bp$variable == bp$variable[i] & abs(mi - mi[i]) <= tol_months
 		bp$common[i] <- length(unique(bp$cluster[same])) >= need
 	}
 	bp
+}
+
+## Rows per flag after minus before the change, in one cluster.
+.bpFlagDelta <- function(tab, s, d, window) {
+	ia <- tab$mi >= s - window & tab$mi < s
+	ib <- tab$mi >= s + d & tab$mi < s + d + window
+	colSums(tab$n[ib, , drop = FALSE]) - colSums(tab$n[ia, , drop = FALSE])
+}
+
+## Is a composition change in cluster `cl` (start month index s, duration d)
+## mirrored by another cluster? Per flag, rows gained by `cl` and lost by the
+## other cluster (and the reverse) count as moved (the smaller of the two).
+## Mirror share = moved / total per-flag change in `cl` (0-1). Overall fleet
+## growth or decline (same sign in both clusters) does not count.
+## Returns list(share, cluster) for the best-matching other cluster.
+.bpMirror <- function(tabs, cl, s, d, window = 12) {
+	dc <- .bpFlagDelta(tabs[[cl]], s, d, window)
+	tot <- sum(abs(dc))
+	others <- setdiff(names(tabs), cl)
+	if (!length(others) || tot == 0) return(list(share = NA_real_, cluster = NA))
+	shares <- vapply(others, function(o) {
+		d2 <- .bpFlagDelta(tabs[[o]], s, d, window)
+		fl <- union(names(dc), names(d2))
+		a <- stats::setNames(numeric(length(fl)), fl); b <- a
+		a[names(dc)] <- dc; b[names(d2)] <- d2
+		sum(pmin(pmax(a, 0), pmax(-b, 0)) + pmin(pmax(-a, 0), pmax(b, 0))) / tot
+	}, numeric(1))
+	list(share = max(shares), cluster = others[which.max(shares)])
 }
 
 #' Breakpoint analysis for all clusters and variables
@@ -364,21 +405,31 @@ flagCommonBreaks <- function(bp, n_clusters, tol_months = 6, min_share = 0.75) {
 #' @param hbf_abrupt_months Fixed timescale for `mean_hbf` (gear changes are
 #'   not tied to cohort turnover). Default 12. `NULL` = cohort timescale.
 #' @param common_tol_months,common_min_share Passed to [flagCommonBreaks()].
+#' @param mirror_min Share of a composition change mirrored by another
+#'   cluster (rows gained here lost there, or the reverse) above which it is
+#'   relabelled "switch". Default 0.5.
+#' @param spatial_window Months before / after for the composition,
+#'   relocation and mirror tests. Default 12.
 #' @param ... Passed to [analyseBreakpointsV2()].
 #' @return Data frame with `cluster`, `variable`, the columns of
-#'   [analyseBreakpointsV2()] and `common`.
+#'   [analyseBreakpointsV2()], `mirror_share`, `mirror_cluster` and `common`.
 #' @family breakpoint analysis v2
 #' @export
 analyseClusterBreakpoints <- function(ts, df = NULL, variables = c("CPUE", "mean_len", "mean_hbf"),
 									  group = "flag", hbf_abrupt_months = 12,
-									  common_tol_months = 6, common_min_share = 0.75, ...) {
+									  common_tol_months = 6, common_min_share = 0.75,
+									  mirror_min = 0.5, spatial_window = 12, ...) {
 	clusters <- sort(unique(ts$cluster))
+	tabs <- if (is.null(df)) NULL else
+		stats::setNames(lapply(clusters, function(cl) spatialMonthTable(df, cl, group = group)),
+						as.character(clusters))
 	rows <- list()
 	for (cl in clusters) {
 		d <- ts[ts$cluster == cl, , drop = FALSE]
-		tab <- if (is.null(df)) NULL else spatialMonthTable(df, cl, group = group)
+		tab <- if (is.null(tabs)) NULL else tabs[[as.character(cl)]]
 		for (v in variables) {
 			res <- analyseBreakpointsV2(d$date, d[[v]], v, d$mean_len, spatial_table = tab,
+										spatial_window = spatial_window,
 										abrupt_months = if (v == "mean_hbf") hbf_abrupt_months else NULL, ...)
 			if (nrow(res)) rows[[length(rows) + 1]] <- cbind(cluster = cl, variable = v, res,
 															 stringsAsFactors = FALSE)
@@ -386,6 +437,16 @@ analyseClusterBreakpoints <- function(ts, df = NULL, variables = c("CPUE", "mean
 	}
 	out <- if (length(rows)) do.call(rbind, rows) else
 		cbind(data.frame(cluster = ts$cluster[0], variable = character()), .bpEmpty())
+
+	out$mirror_share   <- rep(NA_real_, nrow(out))
+	out$mirror_cluster <- rep(NA_character_, nrow(out))
+	if (!is.null(tabs)) for (i in which(out$label == "composition")) {
+		m <- .bpMirror(tabs, as.character(out$cluster[i]), .bpMonthIdx(out$start_date[i]), out$d_hat[i],
+					   window = spatial_window)
+		out$mirror_share[i]   <- m$share
+		out$mirror_cluster[i] <- as.character(m$cluster)
+		if (!is.na(m$share) && m$share >= mirror_min) out$label[i] <- "switch"
+	}
 	flagCommonBreaks(out, length(clusters), common_tol_months, common_min_share)
 }
 
@@ -399,7 +460,7 @@ analyseClusterBreakpoints <- function(ts, df = NULL, variables = c("CPUE", "mean
 #' @family breakpoint analysis v2
 #' @export
 plotBreakpointsV2 <- function(dates, x, bp, y_lab = NULL) {
-	cols <- c(unexplained = "#d7301f", abrupt = "#d7301f", composition = "#7a0177",
+	cols <- c(unexplained = "#d7301f", abrupt = "#d7301f", switch = "#ae017e", composition = "#7a0177",
 			  relocation = "#2b8cbe", transient = "#41ab5d", gradual = "#969696",
 			  ambiguous = "#fdae61", common = "#000000")
 	p <- ggplot2::ggplot(data.frame(date = dates, x = x), ggplot2::aes(date, x)) +

@@ -23,7 +23,11 @@ flagCommonBreaks(bp, n_clusters, tol_months = 6, min_share = 0.75)
 A change is "common" if, for the same variable, at least
 \code{ceiling(min_share * n_clusters)} clusters (and at least 2) have a change
 starting within \code{tol_months} of it. Such changes point to data or
-reporting events rather than to the clustering.
+reporting events rather than to the clustering. Changes labelled
+"composition" or "switch" (the cluster's membership changed) are never
+common and are not counted: a reporting event does not change which flags
+are in a cluster, and rows moving between clusters change several
+clusters at once, which would otherwise pass as common (always, at K = 2).
 }
 \seealso{
 Other breakpoint analysis v2:

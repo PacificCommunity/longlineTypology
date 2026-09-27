@@ -12,6 +12,8 @@ analyseClusterBreakpoints(
   hbf_abrupt_months = 12,
   common_tol_months = 6,
   common_min_share = 0.75,
+  mirror_min = 0.5,
+  spatial_window = 12,
   ...
 )
 }
@@ -31,11 +33,18 @@ not tied to cohort turnover). Default 12. \code{NULL} = cohort timescale.}
 
 \item{common_tol_months, common_min_share}{Passed to \code{\link[=flagCommonBreaks]{flagCommonBreaks()}}.}
 
+\item{mirror_min}{Share of a composition change mirrored by another
+cluster (rows gained here lost there, or the reverse) above which it is
+relabelled "switch". Default 0.5.}
+
+\item{spatial_window}{Months before / after for the composition,
+relocation and mirror tests. Default 12.}
+
 \item{...}{Passed to \code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}}.}
 }
 \value{
 Data frame with \code{cluster}, \code{variable}, the columns of
-\code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}} and \code{common}.
+\code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}}, \code{mirror_share}, \code{mirror_cluster} and \code{common}.
 }
 \description{
 Breakpoint analysis for all clusters and variables
