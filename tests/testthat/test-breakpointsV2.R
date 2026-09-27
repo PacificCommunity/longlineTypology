@@ -89,13 +89,17 @@ test_that("analyseClusterBreakpoints() and plotBreakpointsV2() handle series wit
 	expect_s3_class(plotBreakpointsV2(dates, ts$mean_len[1:120], out[0, ]), "ggplot")
 })
 
-test_that("flagCommonBreaks() never marks or counts composition / switch changes", {
+test_that("flagCommonBreaks() never marks or counts switch changes, but composition can be common", {
 	bp <- data.frame(cluster = c(1, 2), variable = "CPUE",
 					 start_date = as.Date(c("2008-01-15", "2008-02-15")),
 					 label = c("switch", "switch"))
 	expect_false(any(flagCommonBreaks(bp, n_clusters = 2)$common))
 	bp$label <- c("unexplained", "unexplained")
 	expect_true(all(flagCommonBreaks(bp, n_clusters = 2)$common))
+	bp$label <- c("composition", "composition")
+	expect_true(all(flagCommonBreaks(bp, n_clusters = 2)$common))
+	bp$label <- c("switch", "composition")
+	expect_false(any(flagCommonBreaks(bp, n_clusters = 2)$common))
 })
 
 test_that("an ambiguous change can still be labelled composition, never unexplained", {

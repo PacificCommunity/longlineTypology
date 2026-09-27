@@ -30,8 +30,8 @@
 ##        cluster's membership changed for another reason (fleet entering /
 ##        leaving the fishery): stays "composition".
 ##      - changes found at the same time in most clusters -> common = TRUE
-##        (data / reporting events). Composition / switch changes are never
-##        common and do not count towards it.
+##        (data / reporting events, or a fleet appearing everywhere). Switch
+##        changes are never common and do not count towards it.
 
 utils::globalVariables(c("x", "start_date", "end_plot", "lab"))
 
@@ -339,11 +339,13 @@ analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
 #' A change is "common" if, for the same variable, at least
 #' `ceiling(min_share * n_clusters)` clusters (and at least 2) have a change
 #' starting within `tol_months` of it. Such changes point to data or
-#' reporting events rather than to the clustering. Changes labelled
-#' "composition" or "switch" (the cluster's membership changed) are never
-#' common and are not counted: a reporting event does not change which flags
-#' are in a cluster, and rows moving between clusters change several
-#' clusters at once, which would otherwise pass as common (always, at K = 2).
+#' reporting events (or a fleet appearing in every cluster) rather than to
+#' the clustering. Changes labelled "switch" (membership change mirrored by
+#' another cluster: rows moving between clusters) are never common and are
+#' not counted: they change several clusters at once and would otherwise
+#' pass as common (always, at K = 2). Unmirrored "composition" changes can
+#' be common: the same membership change in most clusters at once is a
+#' fleet-wide or data event, not a clustering problem.
 #'
 #' @param bp Output of [analyseClusterBreakpoints()] (columns `cluster`,
 #'   `variable`, `start_date`).
@@ -358,7 +360,7 @@ flagCommonBreaks <- function(bp, n_clusters, tol_months = 6, min_share = 0.75) {
 	need <- max(2, ceiling(min_share * n_clusters))
 	if (nrow(bp) == 0 || n_clusters < 2) return(bp)
 	mi <- .bpMonthIdx(bp$start_date)
-	eligible <- if (is.null(bp$label)) rep(TRUE, nrow(bp)) else !(bp$label %in% c("composition", "switch"))
+	eligible <- if (is.null(bp$label)) rep(TRUE, nrow(bp)) else bp$label != "switch"
 	for (i in which(eligible)) {
 		same <- eligible & bp$variable == bp$variable[i] & abs(mi - mi[i]) <= tol_months
 		bp$common[i] <- length(unique(bp$cluster[same])) >= need
