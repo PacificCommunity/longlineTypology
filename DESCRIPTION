@@ -26,7 +26,8 @@ Imports:
     grDevices,
     parallel,
     utils,
-    changepoint
+    changepoint,
+    EnvCpt
 Suggests: 
     knitr,
     rmarkdown,
