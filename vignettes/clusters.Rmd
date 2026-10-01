@@ -5,11 +5,16 @@ vignette: >
   %\VignetteIndexEntry{Clustering longline fishing strategies}
   %\VignetteEncoding{UTF-8}
   %\VignetteEngine{knitr::rmarkdown}
-editor_options: 
+editor_options:
   chunk_output_type: console
+params:
+  scenario: "sp_lat"
+  outdir: ""      # "" = a temporary directory; set a path to keep the outputs
+  data_path: ""   # "" = bundled mock data; set the path to a seafisheries RDS
+  n_pc: 0         # 0 = use pca_method; integer >= 2 overrides the number of PCs kept
 ---
 
-```{r, include = FALSE}
+```{r knit_options, include = FALSE}
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>"
@@ -20,72 +25,123 @@ knitr::opts_chunk$set(
 library(longlineTypology)
 
 ## Base-R build: dplyr, lubridate and here are not required.
-## `outdir` replaces here("outputs").
-outdir <- file.path(getwd(), "outputs")
+list2env(params, envir = .GlobalEnv)
+
+if (outdir == "") outdir <- file.path(tempdir(), "cluster_outputs")
 dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
 
 stat_list <- list()
 ```
 
 This document demonstrates clustering of operational longline data to identify
-fishing strategies, using a small bundled mock dataset. For a real analysis,
-replace the mock data with output from the `seafisheries` processing pipeline
-in the same format.
+fishing typologies. By default it runs on a small bundled mock dataset; for a
+real analysis, point `data_path` to the output of the `seafisheries`
+processing pipeline (same format), e.g.
+
+```{r render_example, eval = FALSE}
+rmarkdown::render("clusters.Rmd",
+                  params = list(scenario  = "sp_hbf",
+                                data_path = "path/to/LL_EC_LF.RDS",
+                                outdir    = "cluster_outputs/"))
+```
 
 Summary:
 
-- Selects relevant variables for clustering
-- Performs PCA to reduce dimensionality
-- Uses gap statistic to determine optimal number of clusters
-- Assigns clusters to all data points
-- Merges small clusters based on catch threshold
+- Recomputes species fractions for the species used by the scenario
+- Selects relevant variables for clustering and filters invalid hbf / length rows
+- Performs PCA to reduce dimensionality (number of components from the species
+  count, a variance threshold, or a manual override)
+- Uses the gap statistic over bootstrap replicates to find candidate numbers of
+  clusters K
+- Runs kmeans on the full dataset for every candidate K and assigns clusters
+- Saves a diagnostics object that downstream reports read (no dataset inside)
 
-# Load mock data
+# Load dataset
 
-```{r}
+```{r load_dataset}
+if (data_path == "") {
+	data_path <- system.file("extdata", "mockdata", "LL_mock.RDS",
+							 package = "longlineTypology")
+	use_mock  <- TRUE
+} else {
+	use_mock  <- FALSE
+}
 
-EC_clean <- readRDS(system.file("extdata", "mockdata", "LL_mock.RDS",
-                                 package = "longlineTypology"))
+EC_clean <- readRDS(data_path)
 stat_list$nrow_total <- nrow(EC_clean)
 ```
 
-```{r}
+The mock data predates the current `seafisheries` output format: hooks between
+floats are stored as `hbf` and the outlier flag as a logical. The chunk below
+brings it to the expected format (`mean_hbf`, `hbf_outlier` = `"valid"` /
+`"outlier"`). It does nothing on real data.
 
-EC_clean$total_n      <- EC_clean$yft_n + EC_clean$alb_n + EC_clean$bet_n
-EC_clean$yft_fraction <- ifelse(EC_clean$total_n > 0, EC_clean$yft_n / EC_clean$total_n, 0)
-EC_clean$alb_fraction <- ifelse(EC_clean$total_n > 0, EC_clean$alb_n / EC_clean$total_n, 0)
-EC_clean$bet_fraction <- ifelse(EC_clean$total_n > 0, EC_clean$bet_n / EC_clean$total_n, 0)
-names(EC_clean)[names(EC_clean) == "hbf"] <- "mean_hbf"
-EC_clean <- EC_clean[!is.na(EC_clean$mean_hbf), , drop = FALSE]
+```{r mock_format}
+if (use_mock) {
+	names(EC_clean)[names(EC_clean) == "hbf"] <- "mean_hbf"
+	EC_clean$hbf_outlier <- ifelse(!is.na(EC_clean$mean_hbf) & !EC_clean$hbf_outlier,
+								   "valid", "outlier")
+}
 ```
 
 # Define clustering parameters
 
-```{r}
-# Clustering scenario: yellowfin, bigeye, albacore + hooks between floats
-scenario <- "yba_lat"
+```{r parameter_values}
+# PCA parameters
+pca_method             <- "n_components" # "threshold" or "n_components"
+pca_variance_threshold <- 0.7            # Used only when pca_method = "threshold"
 
-# PCA and kmeans parameters
-pca_variance_threshold <- 0.7   # Retain PCs explaining 70% of variance
-sample_no              <- 100 # Sample size per replicate for gap statistic
+# kmeans / gap statistic parameters (sized for the mock data; for the full
+# dataset use e.g. sample_no = 20000, nstart = 30)
+sample_no              <- 100   # Sample size per replicate for gap statistic
 kmeans_set             <- 15    # Number of kmeans replicates
 max_k                  <- 20    # Maximum number of clusters to test
 iter_max               <- 1e6   # Maximum iterations for kmeans
 nstart                 <- 10    # Number of random starts for kmeans
 B_var                  <- 25    # Bootstrap replicates for gap statistic
-ncores				   <- 10	# Number of cores used by fastClusGap (Unix only)
-
-# Cluster merging parameters
-catch_threshold <- 3            # Merge clusters with < 3% of total catch
+ncores                 <- 1    # Number of cores used by fastClusGap (Unix only)
 ```
+
+How the number of principal components is chosen:
+
+- `n_pc > 0` (parameter): manual override, clamped to the number of PCs the
+  scenario provides.
+- `pca_method = "n_components"`: `nSpeciesComponents()` keeps one component
+  fewer than the number of species in the scenario (the species fractions sum
+  to 1, so one of them is redundant), with a minimum of 2.
+- `pca_method = "threshold"`: keeps enough components to explain
+  `pca_variance_threshold` of the variance.
 
 # Select and prepare variables
 
-```{r}
+`selectScenario()` turns the scenario string into column names. Tokens are
+joined with `_`, e.g. `yba` (yellowfin, bigeye, albacore), `ybas` (+ skipjack),
+`sp` (yellowfin, bigeye, albacore, others), `hbf`, `len`, `lat`, `lon`.
+
+`recalcSpeciesFractions()` recomputes `total_n` and the fractions so that the
+fractions of the species *used by the scenario* sum to 1 in every row.
+
+```{r select_prepare_vars}
+EC_clean <- recalcSpeciesFractions(EC_clean, scenario)
+
 pca_select <- selectScenario(scenario)
+
+uses_hbf <- any(c("mean_hbf", "hbf_cat") %in% pca_select)
+uses_len <- "mean_len" %in% pca_select
+
+if (uses_hbf) {
+	stopifnot("hbf_outlier" %in% names(EC_clean))
+	EC_clean <- EC_clean[EC_clean$hbf_outlier == "valid", , drop = FALSE]
+}
+if (uses_len) {
+	stopifnot("len_source" %in% names(EC_clean))
+	EC_clean <- EC_clean[EC_clean$len_source != "imputed", , drop = FALSE]
+}
+stat_list$nrow_after_validity_filter <- nrow(EC_clean)
 
 cat("Variables selected for clustering:\n")
 print(pca_select)
+cat("Rows retained after hbf/len validity filtering:", nrow(EC_clean), "\n")
 
 select_dat <- EC_clean[, pca_select]
 pca_scaled <- pcaScale(select_dat, method = "zscore")
@@ -93,13 +149,35 @@ pca_scaled <- pcaScale(select_dat, method = "zscore")
 
 # Principal Component Analysis
 
-```{r}
+```{r pca}
 pca_res <- customPCA(pca_scaled,
-				 variance_threshold = pca_variance_threshold,
-				 print_it = FALSE)
+					 variance_threshold = pca_variance_threshold,
+					 print_it = FALSE)
 
-cat("PCA retained", pca_res$no_var, "components explaining >=",
-	pca_variance_threshold * 100, "% of variance\n\n")
+max_pc <- ncol(pca_res$x)
+
+if (n_pc > 0) {
+	if (n_pc != round(n_pc)) stop("n_pc must be an integer, got ", n_pc)
+	n_pc_used <- as.integer(n_pc)
+	if (n_pc_used < 2) stop("n_pc must be >= 2, got ", n_pc_used)
+	if (max_pc < 2) stop("Scenario '", scenario, "' yields only ", max_pc,
+						 " PC(s); at least 2 are required")
+	if (n_pc_used > max_pc) {
+		warning("n_pc = ", n_pc_used, " exceeds the ", max_pc,
+				" PCs available for scenario '", scenario,
+				"'; clamping to ", max_pc)
+		n_pc_used <- max_pc
+	}
+	pca_res$no_var <- n_pc_used
+	cat("PCA retained", pca_res$no_var, "components (manual override, requested",
+		n_pc, "of", max_pc, "available)\n\n")
+} else if (pca_method == "n_components") {
+	pca_res$no_var <- nSpeciesComponents(scenario, min_components = 2)
+	cat("PCA retained", pca_res$no_var, "components\n\n")
+} else {
+	cat("PCA retained", pca_res$no_var, "components explaining >=",
+		pca_variance_threshold * 100, "% of variance\n\n")
+}
 
 pca_full <- pca_res$x[, 1:pca_res$no_var]
 
@@ -111,9 +189,14 @@ cat("Using", nrow(pca_full_90), "observations from 1990 onwards for clustering\n
 stat_list$nrow_clustering <- nrow(pca_full_90)
 ```
 
-# Determine optimal number of clusters
+# Determine candidate numbers of clusters
 
-```{r}
+Each replicate draws `sample_no` rows (with replacement) from the post-1990
+data and selects K with the gap statistic. Every K selected by at least one
+replicate is carried forward; the choice between them is left to the
+diagnostic report.
+
+```{r optim_k}
 set.seed(123)
 sample_indices <- lapply(1:kmeans_set, function(x) {
 	sample(1:nrow(pca_full_90), size = sample_no, replace = TRUE)
@@ -134,21 +217,20 @@ for (i in 1:kmeans_set) {
 						iter_max   = iter_max,
 						nstart     = nstart,
 						d.power    = 2,
-						print_it   = FALSE,
-						ncores     = ncores)
+						ncores     = ncores,
+						print_it   = FALSE)
 
 	kmeans_res[[i]] <- res$kmeans
 	gap_stat[[i]]   <- res$gap_stat
 }
 
-# Determine most common K across replicates
+# K selected by each replicate
 cluster_counts <- data.frame(
 	cluster_n = sapply(kmeans_res, function(x) length(unique(x$cluster))),
 	replicate = 1:kmeans_set
 )
 
-freq_table   <- table(cluster_counts$cluster_n)
-main_clust_n <- as.numeric(names(freq_table)[which.max(freq_table)])
+freq_table <- table(cluster_counts$cluster_n)
 
 # Store as data frame for use in diagnostic report
 freq_df <- data.frame(
@@ -158,124 +240,123 @@ freq_df <- data.frame(
 
 cat("\nCluster number distribution across replicates:\n")
 print(freq_table)
-cat("\nSelected K =", main_clust_n, "clusters\n")
-stat_list$selected_k <- main_clust_n
-```
-
-## Standardize cluster number across replicates
-
-```{r}
-samples_to_rerun <- which(cluster_counts$cluster_n != main_clust_n)
-
-if (length(samples_to_rerun) > 0) {
-	cat("\nRerunning", length(samples_to_rerun),
-		"replicates with K =", main_clust_n, "\n")
-
-	for (i in samples_to_rerun) {
-		pca_sub         <- pca_full_90[sample_indices[[i]], 1:pca_res$no_var]
-		kmeans_res[[i]] <- kmeans(pca_sub,
-								  centers  = main_clust_n,
-								  iter.max = iter_max,
-								  nstart   = nstart)
-	}
-}
 ```
 
 # Apply clustering
 
-```{r}
-cat("\nRunning kmeans on full dataset with K =", main_clust_n, "\n")
-kmeans_full <- kmeans(pca_full_90,
-					  centers  = main_clust_n,
-					  iter.max = iter_max,
-					  nstart   = nstart)
+For each candidate K, kmeans is fitted on the full post-1990 data, and every
+row (including pre-1990 rows) is assigned to the nearest centroid with
+`assignClusters()`. Results are stored as `cluster_k<K>` columns.
 
-EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
-								   as.data.frame(kmeans_full$centers))
+```{r kmeans}
+unique_ks <- sort(unique(cluster_counts$cluster_n))
 
-# cluster_init is preserved through both the mutate(cluster = ...) in the
-# merge branch and orderClusters(), which only modifies the cluster column.
-EC_clean$cluster_init <- EC_clean$cluster
+kmeans_full <- list()
 
-cat("Assigned clusters to", nrow(EC_clean), "observations\n")
-```
+for (k in unique_ks) {
+	cat("\nRunning kmeans on full dataset with K =", k, "\n")
 
-# Merge small clusters
+	res_k <- kmeans(pca_full_90, centers = k, iter.max = iter_max, nstart = nstart)
 
-```{r}
-cluster_summary <- summaryClusters(EC_clean)
+	raw_cluster <- assignClusters(as.data.frame(pca_full),
+								  as.data.frame(res_k$centers))
 
-cat("\nInitial cluster summary:\n")
-print(knitr::kable(cluster_summary[, c("cluster", "yft_catch", "yft_frac")],
-				   col.names = c("Cluster", "% Total Catch", "% YFT in Cluster"),
-				   digits = 1))
-
-small_clusters <- cluster_summary[cluster_summary$yft_catch < catch_threshold, , drop = FALSE]
-
-if (nrow(small_clusters) > 0) {
-	cat("\nClusters below", catch_threshold, "% catch threshold:\n")
-	print(small_clusters$cluster)
-
-	main_clusters  <- cluster_summary$cluster[cluster_summary$yft_catch >= catch_threshold]
-
-	main_centroids <- as.data.frame(kmeans_full$centers)[main_clusters, ]
-
-	EC_clean$cluster <- assignClusters(as.data.frame(pca_full), main_centroids)
-	EC_clustered     <- orderClusters(EC_clean)
-
-	stat_list$n_clusters_final <- length(unique(EC_clustered$cluster))
-
-} else {
-	cat("\nNo clusters below threshold\n")
-	EC_clustered <- orderClusters(EC_clean)
-	stat_list$n_clusters_final <- main_clust_n
+	col_name <- paste0("cluster_k", k)
+	EC_clean[[col_name]] <- as.integer(raw_cluster)
+	kmeans_full[[as.character(k)]] <- res_k
 }
 
-cat("\nFinal number of clusters:", stat_list$n_clusters_final, "\n")
+cat("\nAdded columns:", paste0("cluster_k", unique_ks, collapse = ", "), "\n")
 ```
 
-## Final cluster summary
+## Cluster summary per K
 
-```{r}
-final_summary <- summaryClusters(EC_clustered)
+```{r final_cluster_summary, results = "asis"}
+diag_tables <- list()
 
-knitr::kable(
-	final_summary[, c("cluster", "yft_n", "total_n", "yft_catch", "yft_frac")],
-	format     = "simple",
-	col.names  = c("Cluster", "YFT Caught", "Total Catch",
-				   "% of Total", "% YFT in Cluster"),
-	caption    = "Final Cluster Summary",
-	digits     = c(0, 0, 0, 1, 1)
-)
+for (k in unique_ks) {
+	tmp <- EC_clean
+	tmp$cluster <- tmp[[paste0("cluster_k", k)]]
+
+	summary_k <- summaryClusters(tmp)
+
+	cluster_sizes       <- table(tmp$cluster)
+	summary_k$n_obs     <- as.numeric(cluster_sizes[match(summary_k$cluster, names(cluster_sizes))])
+	summary_k$pct_data  <- summary_k$n_obs / nrow(tmp) * 100
+
+	diag_tables[[as.character(k)]] <- summary_k
+
+	replicate_support <- freq_df$freq[freq_df$n_clusters == k]
+	if (length(replicate_support) == 0) replicate_support <- 0
+
+	betweenss_ratio <- kmeans_full[[as.character(k)]]$betweenss /
+		kmeans_full[[as.character(k)]]$totss
+
+	cat("\n### K =", k, "\n\n")
+	cat("Replicate support:", replicate_support, "/", kmeans_set, "  \n")
+	cat("Between-cluster SS / total SS:", round(betweenss_ratio, 3), "\n\n")
+	print(knitr::kable(
+		summary_k[, c("cluster", "n_obs", "pct_data", "yft_n", "total_n",
+					  "yft_catch", "yft_frac")],
+		format    = "simple",
+		col.names = c("Cluster", "N", "% of Data", "YFT Caught", "Total Catch",
+					  "% of Total", "% YFT in Cluster"),
+		digits    = c(0, 0, 1, 0, 0, 1, 1)
+	))
+	cat("\n")
+}
 ```
 
 # Save outputs
 
-The chunk below is reference-only (`eval=FALSE`) and does not run when this
-vignette is built.
+The diagnostics object holds everything a downstream report needs, without the
+dataset itself: run metadata, the scaling and PCA parameters to project new
+data, the kmeans fits per K, the gap-statistic replicates and the cluster
+assignment per row.
 
-```{r, eval = FALSE}
-# EC_data_clustered.RDS: the clustered data frame.
-#   - cluster:      final cluster labels (post-merge, ordered by YFT fraction)
-#   - cluster_init: pre-merge labels (raw kmeans output, unordered)
-saveRDS(EC_clustered, file.path(outdir, "EC_data_clustered.RDS"))
+```{r save_outputs}
+scale_params <- attr(pca_scaled, "scale_params")
 
-# cluster_diagnostics.RDS: everything needed by the diagnostic report vignette.
-# Kept as a single list to avoid cluttering outputs/.
-cluster_diagnostics <- list(
-	pca_res                = pca_res,
-	pca_select             = pca_select,
-	pca_variance_threshold = pca_variance_threshold,
-	scenario               = scenario,
-	gap_stat               = gap_stat,
-	kmeans_res             = kmeans_res,
-	sample_indices         = sample_indices,
-	freq_df                = freq_df,
-	stat_list              = stat_list
+# pca_res$x is the full per-row score matrix, same size as the dataset,
+# and reconstructable via predict(pca_res_light, newdata = <new pca_scaled>),
+# which only needs rotation/center/scale, not $x.
+pca_res_light <- pca_res
+pca_res_light$x <- NULL
+
+diagnostics <- list(
+
+	# run metadata
+	scenario     = scenario,
+	pca_method   = pca_method,
+	pca_variance_threshold = if (pca_method == "threshold") pca_variance_threshold else NA,
+	pca_select   = pca_select,      # variable names -- don't recover via rotation rownames, fragile
+	n_components = pca_res$no_var,  # PCs actually used (after any clamping)
+	n_pc_requested = n_pc,          # 0 = no override; otherwise the requested value
+	n_pc_available = max_pc,
+
+	# training data footprint: lets a future run check "does new data still
+	# look like what this was fit on" without opening the raw file
+	train_nrow       = nrow(EC_clean),
+	train_nrow_1990  = nrow(pca_full_90),
+	train_date_range = range(EC_clean$ymd),
+
+	# apply the same PCA to new/future data
+	scale_params = scale_params,    # mean/sd per raw variable
+	pca_res      = pca_res_light,   # rotation + center + scale, for predict()
+
+	# cluster identity -- assign new data to these same clusters later
+	kmeans_full  = kmeans_full,     # named list keyed by K; centers live in each element
+
+	# reproduce the gap statistic / centroid variability / silhouette / Dunn
+	gap_stat       = gap_stat,      # per-replicate gap tables -> gap statistic plot
+	kmeans_res     = kmeans_res,    # per-replicate kmeans fits -> centroid variability
+	sample_indices = sample_indices,# exact rows sampled per replicate -> silhouette/Dunn need the *same* subsample
+	freq_df        = freq_df,       # K frequency across replicates
+
+	# cluster assignment, without the dataset itself
+	cluster_k = EC_clean[, grep("^cluster_k", names(EC_clean)), drop = FALSE]
 )
-saveRDS(cluster_diagnostics, file.path(outdir, "cluster_diagnostics.RDS"))
 
-cat("\nClustering complete.\n")
-cat("  outputs/EC_data_clustered.RDS  — clustered data (cluster + cluster_init columns)\n")
-cat("  outputs/cluster_diagnostics.RDS — PCA, gap stats, kmeans results\n")
+saveRDS(diagnostics, file.path(outdir, "cluster_diagnostics.RDS"))
+cat("\nSaved diagnostics to", file.path(outdir, "cluster_diagnostics.RDS"), "\n")
 ```
