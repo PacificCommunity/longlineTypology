@@ -27,8 +27,12 @@ Pre-computation for the composition / relocation test of
 Other breakpoint analysis v2:
 \code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}},
 \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
+\code{\link[=breakpointContext]{breakpointContext()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
+\code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
 \code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotInspection]{plotInspection()}},
+\code{\link[=rankBreakpoints]{rankBreakpoints()}},
 \code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }
 \concept{breakpoint analysis v2}

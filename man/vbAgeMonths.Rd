@@ -21,8 +21,12 @@ Unlike \code{\link[=ageFromLength]{ageFromLength()}}, t0 is treated in years thr
 Other breakpoint analysis v2:
 \code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}},
 \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
+\code{\link[=breakpointContext]{breakpointContext()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
+\code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
 \code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotInspection]{plotInspection()}},
+\code{\link[=rankBreakpoints]{rankBreakpoints()}},
 \code{\link[=spatialMonthTable]{spatialMonthTable()}}
 }
 \concept{breakpoint analysis v2}

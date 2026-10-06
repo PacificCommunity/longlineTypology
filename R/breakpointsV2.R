@@ -90,15 +90,20 @@ vbAgeMonths <- function(len, Linf = 150.3, K = 0.442, t0 = -0.244) {
 	aic <- stats::AIC(fit)
 	if (is.null(names(aic))) names(aic) <- models
 	best <- names(aic)[which.min(aic)]
-	if (!grepl("cpt", best)) return(integer(0))
-	cp <- changepoint::cpts(fit[[best]])
-	cp[cp < length(y)]
+	cp <- if (grepl("cpt", best)) changepoint::cpts(fit[[best]]) else integer(0)
+	cp <- cp[cp < length(y)]
+	## kept for breakpoint inspection (why a change was / was not proposed)
+	cpt_models <- intersect(grep("cpt", names(aic), value = TRUE), names(fit))
+	attr(cp, "aic")  <- aic
+	attr(cp, "cpts") <- stats::setNames(lapply(cpt_models, function(m) {
+		v <- changepoint::cpts(fit[[m]]); v[v < length(y)] }), cpt_models)
+	cp
 }
 
 .bpCharacterise <- function(t, y, cand_t, T_c, window = 72,
 							durations = c(1, 3, 6, 12, 18, 24, 36, 48, 72, 96),
 							pulse_taus = c(3, 6, 9, 12, 18, 24, 36, 48, 72, 120),
-							start_slack = 12, margin = 6) {
+							start_slack = 12, margin = 6, detail = FALSE) {
 	in_w <- t >= cand_t - window & t <= cand_t + window
 	tw <- t[in_w]; yw <- y[in_w]; n <- length(yw)
 	if (n < 24) return(NULL)
@@ -145,13 +150,30 @@ vbAgeMonths <- function(len, Linf = 150.3, K = 0.442, t0 = -0.244) {
 	lr <- n_eff * log(rss0 / rss_best)
 
 	pre <- y[t >= best$s - 12 & t < best$s]
-	data.frame(cand_t = cand_t, s_hat = best$s, d_hat = best$d,
+	out <- data.frame(cand_t = cand_t, s_hat = best$s, d_hat = best$d,
 			   d_lo = min(d_ok[in_ci]), d_hi = max(d_ok[in_ci]),
 			   T_c = T_c, delta = unname(delta), pre_level = if (length(pre)) mean(pre) else NA_real_,
 			   lr = lr, p_nominal = stats::pchisq(lr, df = 3, lower.tail = FALSE),
 			   phi = phi, n_eff = n_eff,
 			   pulse_tau = best_p$tau,
 			   pulse_gain = if (is.finite(best_p$rss)) n_eff * log(best$rss / best_p$rss) else NA_real_)
+	if (detail) {
+		## profile over durations (LR statistic against the best ramp and the
+		## chi-square cutoff that defines [d_lo, d_hi]) and the three local fits
+		pulse_x <- if (is.finite(best_p$rss)) ifelse(tw >= best_p$s, exp(-(tw - best_p$s) / best_p$tau), 0) else NULL
+		attr(out, "detail") <- list(
+			t = tw, y = yw,
+			profile = data.frame(d = durations, rss = unname(prof),
+								 stat = n_eff * log(unname(prof) / best$rss),
+								 in_ci = is.finite(prof) & n_eff * log(unname(prof) / best$rss) <= stats::qchisq(0.95, 1)),
+			crit = stats::qchisq(0.95, 1),
+			fit_null  = stats::.lm.fit(X0, yw)$coefficients,
+			fitted_null  = yw - stats::.lm.fit(X0, yw)$residuals,
+			fitted_ramp  = yw - res,
+			fitted_pulse = if (is.null(pulse_x)) NULL else yw - stats::.lm.fit(cbind(X0, pulse_x), yw)$residuals,
+			pulse_s = best_p$s, rss0 = rss0, rss_ramp = best$rss, rss_pulse = best_p$rss)
+	}
+	out
 }
 
 .bpDedupe <- function(ch, gap = 6) {
@@ -208,10 +230,11 @@ spatialMonthTable <- function(df, cluster_id, group = "flag", date_col = "date")
 	c(comp = comp, reloc = reloc)
 }
 
-.bpSpatialTest <- function(s, d, tab, window = 12, null_step = 3, min_rows = 5) {
+.bpSpatialTest <- function(s, d, tab, window = 12, null_step = 3, min_rows = 5, detail = FALSE) {
 	obs <- .bpWindowStats(tab, s - window, s, s + d, s + d + window, min_rows)
 	lo <- min(tab$mi) + window; hi <- max(tab$mi) - d - window
 	p_comp <- p_reloc <- NA_real_
+	null <- data.frame(mi = integer(), comp = numeric(), reloc = numeric())
 	if (lo <= hi) {
 		u <- seq(lo, hi, by = null_step)
 		nul <- vapply(u, function(ui) .bpWindowStats(tab, ui - window, ui, ui + d, ui + d + window, min_rows),
@@ -219,17 +242,68 @@ spatialMonthTable <- function(df, cluster_id, group = "flag", date_col = "date")
 		empP <- function(o, v) { v <- v[!is.na(v)]; if (is.na(o) || !length(v)) NA_real_ else (1 + sum(v >= o)) / (1 + length(v)) }
 		p_comp  <- empP(obs[["comp"]],  nul[1, ])
 		p_reloc <- empP(obs[["reloc"]], nul[2, ])
+		null <- data.frame(mi = u, comp = nul[1, ], reloc = nul[2, ])
 	}
-	list(comp_change = obs[["comp"]], p_comp = p_comp, reloc_km = obs[["reloc"]], p_reloc = p_reloc)
+	out <- list(comp_change = obs[["comp"]], p_comp = p_comp, reloc_km = obs[["reloc"]], p_reloc = p_reloc)
+	if (detail) out$null <- null
+	out
 }
 
 .bpEmpty <- function() {
-	data.frame(start_date = as.Date(character()), end_date = as.Date(character()),
+	data.frame(cand_date = as.Date(character()), start_date = as.Date(character()), end_date = as.Date(character()),
 			   d_hat = numeric(), d_lo = numeric(), d_hi = numeric(), T_c = numeric(),
 			   delta = numeric(), delta_rel = numeric(), lr = numeric(), p_nominal = numeric(),
 			   phi = numeric(), pulse_tau = numeric(), pulse_gain = numeric(), class = character(),
 			   comp_change = numeric(), p_comp = numeric(), reloc_km = numeric(), p_reloc = numeric(),
 			   label = character(), stringsAsFactors = FALSE)
+}
+
+## Shared by analyseBreakpointsV2() and inspectBreakpoint(): pre-processing,
+## timescale and classification. Keep in one place so the inspection always
+## reproduces the pipeline.
+.bpPrepare <- function(dates, x, variable, mean_len, deseason = TRUE) {
+	ok <- !is.na(x) & is.finite(x)
+	dates <- dates[ok]; x <- x[ok]; ml <- mean_len[ok]
+	ord <- order(dates); dates <- dates[ord]; x <- x[ord]; ml <- ml[ord]
+	t <- .bpMonthIdx(dates)
+	y <- x
+	if (variable == "CPUE") {
+		pos <- x[x > 0]
+		y <- log(pmax(x, if (length(pos)) min(pos) / 2 else 1e-6))
+	}
+	clim <- NULL
+	if (deseason && length(y)) {
+		moy <- (t - 1) %% 12
+		clim <- tapply(y, moy, mean)
+		y <- as.numeric(y - clim[as.character(moy)] + mean(y))
+	}
+	list(dates = dates, x = x, t = t, y = y, ml = ml, clim = clim)
+}
+
+.bpTimescale <- function(t, ml, ct, abrupt_months = NULL, Linf = 150.3, K = 0.442, t0 = -0.244) {
+	if (!is.null(abrupt_months)) return(abrupt_months)
+	suppressWarnings(stats::median(vbAgeMonths(ml[abs(t - ct) <= 12], Linf, K, t0), na.rm = TRUE))
+}
+
+.bpClassify <- function(ch, transient_tau_frac = 0.5) {
+	transient <- !is.na(ch$pulse_gain) & ch$pulse_gain > 0 & !is.na(ch$T_c) &
+				 ch$pulse_tau <= transient_tau_frac * ch$T_c
+	ifelse(is.na(ch$T_c), "no_timescale",
+	ifelse(transient,         "transient",
+	ifelse(ch$d_hi <= ch$T_c, "abrupt",
+	ifelse(ch$d_lo >  ch$T_c, "gradual", "ambiguous"))))
+}
+
+.bpSpatialLabel <- function(class, p_comp, p_reloc, spatial_alpha = 0.05) {
+	label <- class
+	ab   <- class == "abrupt"
+	fast <- ab | class == "ambiguous"   # abrupt, or possibly abrupt
+	comp_sig  <- !is.na(p_comp)  & p_comp  < spatial_alpha
+	reloc_sig <- !is.na(p_reloc) & p_reloc < spatial_alpha
+	label[fast & comp_sig]               <- "composition"
+	label[fast & !comp_sig & reloc_sig]  <- "relocation"
+	label[ab   & !comp_sig & !reloc_sig] <- "unexplained"
+	label
 }
 
 #' Detect and classify changes in one cluster time series
@@ -257,6 +331,8 @@ spatialMonthTable <- function(df, cluster_id, group = "flag", date_col = "date")
 #'   of that test.
 #' @param Linf,K,t0 Growth parameters for [vbAgeMonths()].
 #' @return Data frame, one row per significant change (0 rows if none).
+#'   `cand_date` is the EnvCpt / PELT candidate the change was characterised
+#'   around (used by [inspectBreakpoint()] to reproduce it).
 #' @family breakpoint analysis v2
 #' @export
 analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
@@ -267,22 +343,9 @@ analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
 								 Linf = 150.3, K = 0.442, t0 = -0.244) {
 	detector <- match.arg(detector)
 	empty <- .bpEmpty()
-	ok <- !is.na(x) & is.finite(x)
-	dates <- dates[ok]; x <- x[ok]; ml <- mean_len[ok]
-	ord <- order(dates); dates <- dates[ord]; x <- x[ord]; ml <- ml[ord]
-	if (length(x) < 48) return(empty)
-
-	t <- .bpMonthIdx(dates)
-	y <- x
-	if (variable == "CPUE") {
-		pos <- x[x > 0]
-		y <- log(pmax(x, if (length(pos)) min(pos) / 2 else 1e-6))
-	}
-	if (deseason) {
-		moy <- (t - 1) %% 12
-		clim <- tapply(y, moy, mean)
-		y <- as.numeric(y - clim[as.character(moy)] + mean(y))
-	}
+	pr <- .bpPrepare(dates, x, variable, mean_len, deseason)
+	if (length(pr$y) < 48) return(empty)
+	t <- pr$t; y <- pr$y; ml <- pr$ml
 
 	cand <- tryCatch(switch(detector,
 		envcpt = do.call(.bpCandidatesEnvCpt, c(list(y = y), detector_args)),
@@ -290,12 +353,8 @@ analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
 		error = function(e) structure(integer(0), error = conditionMessage(e)))
 	if (!length(cand)) { attr(empty, "error") <- attr(cand, "error"); return(empty) }
 
-	rows <- lapply(unique(t[cand]), function(ct) {
-		T_c <- if (is.null(abrupt_months))
-			suppressWarnings(stats::median(vbAgeMonths(ml[abs(t - ct) <= 12], Linf, K, t0), na.rm = TRUE))
-		else abrupt_months
-		.bpCharacterise(t, y, ct, T_c = T_c, window = window)
-	})
+	rows <- lapply(unique(t[cand]), function(ct)
+		.bpCharacterise(t, y, ct, T_c = .bpTimescale(t, ml, ct, abrupt_months, Linf, K, t0), window = window))
 	rows <- rows[!vapply(rows, is.null, logical(1))]
 	if (!length(rows)) return(empty)
 	ch <- do.call(rbind, rows)
@@ -303,15 +362,11 @@ analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
 	if (nrow(ch) == 0) return(empty)
 	ch <- .bpDedupe(ch)
 
+	ch$cand_date  <- .bpIdxToDate(ch$cand_t)
 	ch$start_date <- .bpIdxToDate(ch$s_hat)
 	ch$end_date   <- .bpIdxToDate(ch$s_hat + ch$d_hat)
 	ch$delta_rel  <- if (variable == "CPUE") expm1(ch$delta) else ch$delta / abs(ch$pre_level)
-	transient <- !is.na(ch$pulse_gain) & ch$pulse_gain > 0 & !is.na(ch$T_c) &
-				 ch$pulse_tau <= transient_tau_frac * ch$T_c
-	ch$class <- ifelse(is.na(ch$T_c), "no_timescale",
-				ifelse(transient,         "transient",
-				ifelse(ch$d_hi <= ch$T_c, "abrupt",
-				ifelse(ch$d_lo >  ch$T_c, "gradual", "ambiguous"))))
+	ch$class <- .bpClassify(ch, transient_tau_frac)
 
 	ch$comp_change <- ch$p_comp <- ch$reloc_km <- ch$p_reloc <- NA_real_
 	ch$label <- ch$class
@@ -321,13 +376,7 @@ analyseBreakpointsV2 <- function(dates, x, variable, mean_len,
 			ch$comp_change[i] <- sp$comp_change; ch$p_comp[i]  <- sp$p_comp
 			ch$reloc_km[i]    <- sp$reloc_km;    ch$p_reloc[i] <- sp$p_reloc
 		}
-		ab   <- ch$class == "abrupt"
-		fast <- ab | ch$class == "ambiguous"   # abrupt, or possibly abrupt
-		comp_sig  <- !is.na(ch$p_comp)  & ch$p_comp  < spatial_alpha
-		reloc_sig <- !is.na(ch$p_reloc) & ch$p_reloc < spatial_alpha
-		ch$label[fast & comp_sig]               <- "composition"
-		ch$label[fast & !comp_sig & reloc_sig]  <- "relocation"
-		ch$label[ab   & !comp_sig & !reloc_sig] <- "unexplained"
+		ch$label <- .bpSpatialLabel(ch$class, ch$p_comp, ch$p_reloc, spatial_alpha)
 	}
 	out <- ch[order(ch$s_hat), names(empty)]
 	rownames(out) <- NULL
@@ -393,7 +442,7 @@ flagCommonBreaks <- function(bp, n_clusters, tol_months = 6, min_share = 0.75) {
 		a[names(dc)] <- dc; b[names(d2)] <- d2
 		sum(pmin(pmax(a, 0), pmax(-b, 0)) + pmin(pmax(-a, 0), pmax(b, 0))) / tot
 	}, numeric(1))
-	list(share = max(shares), cluster = others[which.max(shares)])
+	list(share = max(shares), cluster = others[which.max(shares)], all = shares)
 }
 
 #' Breakpoint analysis for all clusters and variables

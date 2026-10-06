@@ -60,6 +60,8 @@ of that test.}
 }
 \value{
 Data frame, one row per significant change (0 rows if none).
+\code{cand_date} is the EnvCpt / PELT candidate the change was characterised
+around (used by \code{\link[=inspectBreakpoint]{inspectBreakpoint()}} to reproduce it).
 }
 \description{
 See the file header of R/breakpointsV2.R and breakpoint_report.qmd for the
@@ -68,8 +70,12 @@ method, its calibration and detection limits.
 \seealso{
 Other breakpoint analysis v2:
 \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
+\code{\link[=breakpointContext]{breakpointContext()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
+\code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
 \code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotInspection]{plotInspection()}},
+\code{\link[=rankBreakpoints]{rankBreakpoints()}},
 \code{\link[=spatialMonthTable]{spatialMonthTable()}},
 \code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }

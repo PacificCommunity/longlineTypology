@@ -52,8 +52,12 @@ Breakpoint analysis for all clusters and variables
 \seealso{
 Other breakpoint analysis v2:
 \code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}},
+\code{\link[=breakpointContext]{breakpointContext()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
+\code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
 \code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotInspection]{plotInspection()}},
+\code{\link[=rankBreakpoints]{rankBreakpoints()}},
 \code{\link[=spatialMonthTable]{spatialMonthTable()}},
 \code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }

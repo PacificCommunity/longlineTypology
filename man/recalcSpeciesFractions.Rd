@@ -21,6 +21,12 @@ Overwrites \code{total_n} and the relevant \verb{*_fraction} columns so that,
 within each row, the fractions of the species present in \code{scenario} sum
 to 1. Species not referenced by \code{scenario} are left untouched.
 }
+\details{
+When \code{scenario} contains the \code{sp} token (and skj is not selected
+explicitly), skipjack catch is counted as "other":
+\code{oth_fraction = (oth_n + skj_n) / total_n} and \code{total_n} includes \code{skj_n}.
+The \code{oth_n}, \code{skj_n} and \code{skj_fraction} columns are not modified.
+}
 \seealso{
 Other clustering utilities:
 \code{\link[=assignClusters]{assignClusters()}},
