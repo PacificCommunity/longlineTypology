@@ -617,6 +617,11 @@ nSpeciesComponents <- function(scenario, min_components = 2) {
 #' within each row, the fractions of the species present in `scenario` sum
 #' to 1. Species not referenced by `scenario` are left untouched.
 #'
+#' When `scenario` contains the `sp` token (and skj is not selected
+#' explicitly), skipjack catch is counted as "other":
+#' `oth_fraction = (oth_n + skj_n) / total_n` and `total_n` includes `skj_n`.
+#' The `oth_n`, `skj_n` and `skj_fraction` columns are not modified.
+#'
 #' @param df A dataframe with `*_n` count columns for each species
 #'   (`yft_n`, `bet_n`, `alb_n`, `skj_n`, `oth_n`).
 #' @param scenario Character string, as passed to [selectScenario()].
@@ -637,15 +642,24 @@ recalcSpeciesFractions <- function(df, scenario) {
 		return(df)
 	}
 	n_cols <- sub("_fraction$", "_n", frac_cols)
-	missing_n <- setdiff(n_cols, names(df))
+
+	## sp scenarios: fold skj into oth for the fraction only.
+	tokens   <- strsplit(scenario, "_", fixed = TRUE)[[1]]
+	fold_skj <- "sp" %in% tokens && !("skj_fraction" %in% frac_cols)
+
+	need_n    <- if (fold_skj) c(n_cols, "skj_n") else n_cols
+	missing_n <- setdiff(need_n, names(df))
 	if (length(missing_n) > 0)
 		stop("recalcSpeciesFractions(): missing count column(s): ",
 			 paste(missing_n, collapse = ", "))
 
-	df$total_n <- rowSums(df[, n_cols, drop = FALSE])
+	counts <- df[, n_cols, drop = FALSE]
+	if (fold_skj) counts$oth_n <- counts$oth_n + df$skj_n
+
+	df$total_n <- rowSums(counts)
 	for (i in seq_along(frac_cols)) {
 		df[[frac_cols[i]]] <- ifelse(df$total_n > 0,
-									 df[[n_cols[i]]] / df$total_n, 0)
+									 counts[[n_cols[i]]] / df$total_n, 0)
 	}
 	df
 }
