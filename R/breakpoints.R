@@ -388,38 +388,65 @@ validateBreakpointSpatial <- function(bp_dates, df, cluster_id, strictness = "mo
 #' (cluster, date). Not a general-purpose cluster summary -- see
 #' [summaryClusters()] for per-cluster (not per-date) statistics, and note
 #' this does none of `summarizeClusterData()`'s (myLibrary.r) extra work:
-#' no lat/lon centroid, no fleet-movement distance, no imputation-flag
-#' handling.
+#' no lat/lon centroid, no fleet-movement distance.
+#'
+#' Imputed values are left out of the `mean_len` and `mean_hbf` series by
+#' default, whatever the clustering scenario: they are set to `NA` before
+#' averaging, so each monthly value rests on the remaining rows only. A
+#' (cluster, date) with no remaining row gets `NA`, which the breakpoint
+#' analysis drops. CPUE is not affected. Rows are identified as imputed from
+#' the `len_source` and `hbf_outlier` columns; if a column is absent, the
+#' corresponding variable is used as is.
 #'
 #' @param df Data frame with `cluster`, `ymd`, `yft_n`, `E`, `mean_len`,
-#'   `mean_hbf` columns. `mean_len`/`mean_hbf` are assumed NA-free (filter
-#'   upstream, as `report.qmd` already does) -- this does not `na.rm`.
+#'   `mean_hbf` columns, and optionally `len_source` and `hbf_outlier`.
+#'   Missing `mean_len` / `mean_hbf` values are ignored.
+#' @param use_imputed Logical. `FALSE` (default): imputed lengths and HBF are
+#'   left out of the series. `TRUE`: every row is used.
+#' @param len_imputed Character, values of `len_source` marking an imputed
+#'   length (default `"imputed"`). Other sources (operational, aggregated) are
+#'   kept.
+#' @param hbf_valid Character, values of `hbf_outlier` marking a reported
+#'   (non-imputed) HBF (default `"valid"`). Rows with any other value are
+#'   left out of `mean_hbf`.
 #'
 #' @return A data frame with one row per (cluster, date) present in `df`,
-#'   columns `cluster`, `date`, `CPUE`, `mean_len`, `mean_hbf`, sorted by
-#'   cluster then date.
+#'   columns `cluster`, `date`, `CPUE`, `mean_len`, `mean_hbf`, and `n_len`,
+#'   `n_hbf` (number of rows behind each `mean_len` / `mean_hbf` value),
+#'   sorted by cluster then date.
 #'
 #' @family breakpoint analysis utilities
 #' @export
-aggregateClusterTimeSeries <- function(df) {
+aggregateClusterTimeSeries <- function(df, use_imputed = FALSE,
+									   len_imputed = "imputed", hbf_valid = "valid") {
 	key   <- paste(as.character(df$cluster), format(df$ymd), sep = "\r")
 	first <- !duplicated(key)
 	d_cluster <- df$cluster[first]
 	d_date    <- df$ymd[first]
 
+	len <- df$mean_len
+	hbf <- df$mean_hbf
+	if (!use_imputed) {
+		if ("len_source" %in% names(df))  len[df$len_source %in% len_imputed] <- NA
+		if ("hbf_outlier" %in% names(df)) hbf[!df$hbf_outlier %in% hbf_valid] <- NA
+	}
+
 	sums <- rowsum(as.matrix(df[, c("yft_n", "E")]), group = key, reorder = FALSE)
 	CPUE <- sums[, "yft_n"] / sums[, "E"]
 
+	## mean and number of non-missing values per key
 	mean_by_key <- function(x) {
-		m <- rowsum(cbind(v = x, n = 1), group = key, reorder = FALSE)
-		m[, "v"] / m[, "n"]
+		ok <- !is.na(x)
+		m  <- rowsum(cbind(v = ifelse(ok, x, 0), n = ok), group = key, reorder = FALSE)
+		list(mean = ifelse(m[, "n"] > 0, m[, "v"] / m[, "n"], NA_real_), n = m[, "n"])
 	}
+	ml <- mean_by_key(len)
+	mh <- mean_by_key(hbf)
 
 	out <- data.frame(cluster = d_cluster, date = d_date, CPUE = CPUE,
-					  mean_len = mean_by_key(df$mean_len), mean_hbf = mean_by_key(df$mean_hbf))
+					  mean_len = ml$mean, mean_hbf = mh$mean, n_len = ml$n, n_hbf = mh$n)
 	out[order(out$cluster, out$date), ]
 }
-
 
 # ---- statistical detection ------------------------------------------------
 

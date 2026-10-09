@@ -4,17 +4,34 @@
 \alias{aggregateClusterTimeSeries}
 \title{Aggregate fisheries data into per-(cluster, date) time series}
 \usage{
-aggregateClusterTimeSeries(df)
+aggregateClusterTimeSeries(
+  df,
+  use_imputed = FALSE,
+  len_imputed = "imputed",
+  hbf_valid = "valid"
+)
 }
 \arguments{
 \item{df}{Data frame with \code{cluster}, \code{ymd}, \code{yft_n}, \code{E}, \code{mean_len},
-\code{mean_hbf} columns. \code{mean_len}/\code{mean_hbf} are assumed NA-free (filter
-upstream, as \code{report.qmd} already does) -- this does not \code{na.rm}.}
+\code{mean_hbf} columns, and optionally \code{len_source} and \code{hbf_outlier}.
+Missing \code{mean_len} / \code{mean_hbf} values are ignored.}
+
+\item{use_imputed}{Logical. \code{FALSE} (default): imputed lengths and HBF are
+left out of the series. \code{TRUE}: every row is used.}
+
+\item{len_imputed}{Character, values of \code{len_source} marking an imputed
+length (default \code{"imputed"}). Other sources (operational, aggregated) are
+kept.}
+
+\item{hbf_valid}{Character, values of \code{hbf_outlier} marking a reported
+(non-imputed) HBF (default \code{"valid"}). Rows with any other value are
+left out of \code{mean_hbf}.}
 }
 \value{
 A data frame with one row per (cluster, date) present in \code{df},
-columns \code{cluster}, \code{date}, \code{CPUE}, \code{mean_len}, \code{mean_hbf}, sorted by
-cluster then date.
+columns \code{cluster}, \code{date}, \code{CPUE}, \code{mean_len}, \code{mean_hbf}, and \code{n_len},
+\code{n_hbf} (number of rows behind each \code{mean_len} / \code{mean_hbf} value),
+sorted by cluster then date.
 }
 \description{
 Minimal, purpose-built aggregation for breakpoint analysis: catch per unit
@@ -22,8 +39,16 @@ effort (CPUE), mean length, and mean hooks-between-floats, one row per
 (cluster, date). Not a general-purpose cluster summary -- see
 \code{\link[=summaryClusters]{summaryClusters()}} for per-cluster (not per-date) statistics, and note
 this does none of \code{summarizeClusterData()}'s (myLibrary.r) extra work:
-no lat/lon centroid, no fleet-movement distance, no imputation-flag
-handling.
+no lat/lon centroid, no fleet-movement distance.
+}
+\details{
+Imputed values are left out of the \code{mean_len} and \code{mean_hbf} series by
+default, whatever the clustering scenario: they are set to \code{NA} before
+averaging, so each monthly value rests on the remaining rows only. A
+(cluster, date) with no remaining row gets \code{NA}, which the breakpoint
+analysis drops. CPUE is not affected. Rows are identified as imputed from
+the \code{len_source} and \code{hbf_outlier} columns; if a column is absent, the
+corresponding variable is used as is.
 }
 \seealso{
 Other breakpoint analysis utilities:
