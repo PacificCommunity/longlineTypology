@@ -29,6 +29,7 @@ The \code{oth_n}, \code{skj_n} and \code{skj_fraction} columns are not modified.
 }
 \seealso{
 Other clustering utilities:
+\code{\link[=applyScaleParams]{applyScaleParams()}},
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customKmeans]{customKmeans()}},
 \code{\link[=customPCA]{customPCA()}},

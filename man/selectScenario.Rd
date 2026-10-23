@@ -40,6 +40,7 @@ selectScenario("sp_hbf_lon_lat")
 }
 \seealso{
 Other clustering utilities:
+\code{\link[=applyScaleParams]{applyScaleParams()}},
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customKmeans]{customKmeans()}},
 \code{\link[=customPCA]{customPCA()}},

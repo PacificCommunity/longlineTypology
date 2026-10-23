@@ -68,6 +68,7 @@ res$plot            # diagnostic plot
 }
 \seealso{
 Other clustering utilities:
+\code{\link[=applyScaleParams]{applyScaleParams()}},
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customPCA]{customPCA()}},
 \code{\link[=nSpeciesComponents]{nSpeciesComponents()}},

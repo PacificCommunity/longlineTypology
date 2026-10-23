@@ -31,6 +31,7 @@ EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
 }
 \seealso{
 Other clustering utilities:
+\code{\link[=applyScaleParams]{applyScaleParams()}},
 \code{\link[=customKmeans]{customKmeans()}},
 \code{\link[=customPCA]{customPCA()}},
 \code{\link[=nSpeciesComponents]{nSpeciesComponents()}},

@@ -2,32 +2,44 @@
 % Please edit documentation in R/clustering.R
 \name{orderClusters}
 \alias{orderClusters}
-\title{Reorder clusters by descending yellowfin fraction}
+\title{Reorder clusters by descending yellowfin catch or fraction}
 \usage{
-orderClusters(df)
+orderClusters(df, by = c("yft_w", "yft_frac"))
 }
 \arguments{
-\item{df}{A dataframe with columns \code{cluster}, \code{yft_n}, and \code{total_n}.}
+\item{df}{A dataframe with a \code{cluster} column, plus \code{yft_w} when
+\code{by = "yft_w"}, or \code{yft_n} and \code{total_n} when \code{by = "yft_frac"}.}
+
+\item{by}{Ordering criterion, one of:
+\describe{
+\item{\code{"yft_w"}}{(default) total yellowfin catch in weight,
+\code{sum(yft_w)} (missing values ignored).}
+\item{\code{"yft_frac"}}{yellowfin fraction of the cluster's catch in
+number, \code{sum(yft_n) / sum(total_n)}.}
+}}
 }
 \value{
 The input dataframe with \code{cluster} replaced by a factor ordered
-by descending yellowfin fraction.
+by the chosen criterion, descending. The original labels, in their new
+order, are stored in \code{attr(, "old_ids")}: new label \code{i} is old label
+\code{old_ids[i]}.
 }
 \description{
-Renumbers cluster labels so that cluster 1 has the highest proportion of
-yellowfin in its catch, cluster 2 the second highest, and so on. Ensures
-consistent, interpretable ordering across runs.
+Renumbers cluster labels so that cluster 1 ranks highest on the chosen
+yellowfin criterion, cluster 2 second, and so on. Ensures consistent,
+interpretable ordering across runs.
 }
 \examples{
-\dontrun{
-EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
-                                   as.data.frame(kmeans_full$centers))
-EC_clustered <- orderClusters(EC_clean)
-}
+df <- data.frame(cluster = c(1, 1, 2, 3),
+                 yft_n = c(10, 5, 40, 2), total_n = c(20, 20, 50, 10),
+                 yft_w = c(1, 1, 3, 9))
+attr(orderClusters(df), "old_ids")                    # by yellowfin weight
+attr(orderClusters(df, by = "yft_frac"), "old_ids")   # by yellowfin fraction
 
 }
 \seealso{
 Other clustering utilities:
+\code{\link[=applyScaleParams]{applyScaleParams()}},
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customKmeans]{customKmeans()}},
 \code{\link[=customPCA]{customPCA()}},

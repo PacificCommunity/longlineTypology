@@ -96,8 +96,8 @@ make_fleet_df <- function(n_periods = 20, cluster_id = 1, jump_at = NULL, n_per_
 		base_lon <- 160; base_lat <- -20
 		if (!is.null(jump_at) && i >= jump_at) { base_lon <- 170; base_lat <- -10 }
 		data.frame(cluster = cluster_id, date = dates[i],
-				  longitude = base_lon + stats::rnorm(n_per_period, sd = 0.2),
-				  latitude  = base_lat + stats::rnorm(n_per_period, sd = 0.2))
+				   longitude = base_lon + stats::rnorm(n_per_period, sd = 0.2),
+				   latitude  = base_lat + stats::rnorm(n_per_period, sd = 0.2))
 	}))
 }
 
@@ -107,7 +107,7 @@ test_that("calculateClusterMovementBaseline() returns one metric per consecutive
 	baseline <- calculateClusterMovementBaseline(df, cluster_id = 1)
 	expect_length(baseline$raw_metrics$centroid_distances, 9)
 	expect_true(all(c("mean", "sd", "q10", "q25", "q75", "q90") %in%
-					names(baseline$thresholds$centroid_distance)))
+						names(baseline$thresholds$centroid_distance)))
 })
 
 test_that("evaluateBreakpointMovement() rejects an unrecognised strictness", {
@@ -211,12 +211,15 @@ test_that("aggregateClusterTimeSeries() aggregates CPUE/mean_len/mean_hbf correc
 	out <- aggregateClusterTimeSeries(df)
 
 	expect_equal(nrow(out), 3)
-	expect_setequal(names(out), c("cluster", "date", "CPUE", "mean_len", "mean_hbf"))
+	expect_setequal(names(out), c("cluster", "date", "CPUE", "mean_len", "mean_hbf",
+								  "n_len", "n_hbf"))
 
 	c1_jan <- out[out$cluster == 1 & out$date == as.Date("2000-01-15"), ]
 	expect_equal(c1_jan$CPUE, (10 + 5) / (2 + 3))
 	expect_equal(c1_jan$mean_len, mean(c(100, 110)))
 	expect_equal(c1_jan$mean_hbf, mean(c(8, 9)))
+	expect_equal(c1_jan$n_len, 2)
+	expect_equal(c1_jan$n_hbf, 2)
 
 	c2_jan <- out[out$cluster == 2 & out$date == as.Date("2000-01-15"), ]
 	expect_equal(c2_jan$CPUE, (3 + 7) / (1 + 1))
@@ -247,8 +250,8 @@ test_that("analyseBreakpoints() returns a well-typed 0-row data frame when no ca
 	expect_s3_class(out, "data.frame")
 	expect_equal(nrow(out), 0)
 	expect_named(out, c("bp_date", "age_limit_days", "phase_days", "passed_age",
-					   "centroid_distance", "spatial_overlap", "spread_change_ratio",
-					   "passed_spatial", "valid"))
+						"centroid_distance", "spatial_overlap", "spread_change_ratio",
+						"passed_spatial", "valid"))
 
 	## the actual failure mode reported: plotBreakpoints() must not error on this
 	p <- plotBreakpoints(dates, x, out)

@@ -1,6 +1,6 @@
 ## Base-R build: no dplyr, no rlang, no factoextra. See BASE-R-CHANGES.md.
 utils::globalVariables(c("PC1", "PC2", "k", "gap", "sd", "pct", "x", "y",
-                         "contrib", "varname", "col", "label"))
+						 "contrib", "varname", "col", "label"))
 
 NULL
 
@@ -140,6 +140,52 @@ pcaScale <- function(select_dat, method = "zscore") {
 }
 
 
+#' Apply saved z-score parameters to new data
+#'
+#' Scales the columns of `df` with the means and standard deviations stored
+#' by [pcaScale()] (its `"scale_params"` attribute), rather than with the
+#' data's own mean and sd. Use it to put rows that were not used to fit the
+#' scaling (e.g. years outside the fit window, or a new data extraction) on
+#' the same scale as the fit rows, before projecting them with
+#' `predict(<prcomp>, newdata = )`.
+#'
+#' Zero-variance columns were stored by [pcaScale()] with `sd = 1`, so they
+#' are centred only, as in the original fit.
+#'
+#' @param df A dataframe containing every column named in
+#'   `scale_params$variable`. Other columns are returned unchanged.
+#' @param scale_params A dataframe with columns `variable`, `mean` and `sd`,
+#'   typically `attr(pcaScale(...), "scale_params")`.
+#'
+#' @return `df` as a dataframe, with the `scale_params` columns scaled and
+#'   `scale_params` attached as the `"scale_params"` attribute.
+#'
+#' @examples
+#' fit <- data.frame(a = c(1, 2, 3), b = c(10, 20, 30))
+#' sp  <- attr(pcaScale(fit), "scale_params")
+#' applyScaleParams(data.frame(a = c(2, 5), b = c(20, 0)), sp)
+#'
+#' @family clustering utilities
+#' @export
+applyScaleParams <- function(df, scale_params) {
+	if (is.null(scale_params) ||
+		!all(c("variable", "mean", "sd") %in% names(scale_params)))
+		stop("applyScaleParams(): scale_params needs columns variable, mean, ",
+			 "sd (as returned by pcaScale(method = \"zscore\"))")
+	df <- as.data.frame(df)
+	missing_cols <- setdiff(scale_params$variable, names(df))
+	if (length(missing_cols) > 0)
+		stop("applyScaleParams(): missing column(s): ",
+			 paste(missing_cols, collapse = ", "))
+	for (i in seq_len(nrow(scale_params))) {
+		v <- scale_params$variable[i]
+		df[[v]] <- (df[[v]] - scale_params$mean[i]) / scale_params$sd[i]
+	}
+	attr(df, "scale_params") <- scale_params
+	df
+}
+
+
 #' Run PCA and select components by variance threshold
 #'
 #' Runs PCA on pre-scaled data, retains the minimum number of principal
@@ -172,7 +218,7 @@ pcaScale <- function(select_dat, method = "zscore") {
 #' @importFrom ggplot2 ggplot aes geom_point geom_hline geom_vline geom_text geom_segment geom_col geom_line geom_path scale_colour_identity coord_equal arrow unit labs theme_minimal
 #' @export
 customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
-				  return_print = FALSE) {
+					  return_print = FALSE) {
 	pca_res    <- stats::prcomp(data_df, scale. = FALSE)
 	pca_scores <- as.data.frame(pca_res$x)
 	loadings   <- as.data.frame(pca_res$rotation)
@@ -207,7 +253,7 @@ customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 		PC1     = loadings$PC1 * sqrt(eigenvalues[1]),
 		PC2     = loadings$PC2 * sqrt(eigenvalues[2]),
 		contrib = (loadings$PC1^2 * eigenvalues[1] +
-				   loadings$PC2^2 * eigenvalues[2]) / e12 * 100,
+				   	loadings$PC2^2 * eigenvalues[2]) / e12 * 100,
 		stringsAsFactors = FALSE)
 	## Colours are resolved here with grDevices::colorRampPalette() and fed
 	## through scale_colour_identity(), rather than scale_colour_gradientn().
@@ -372,7 +418,7 @@ customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 	nc <- selectK(Tab)
 
 
-    plot_gap <- data.frame(k   = as.factor(attr(Tab, "k")),
+	plot_gap <- data.frame(k   = as.factor(attr(Tab, "k")),
 						   gap = Tab[, "gap"],
 						   sd  = Tab[, "SE.sim"])
 
@@ -388,7 +434,7 @@ customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 	if (nc == max_k) cat("Selected K is max K\n")
 
 	kmeans_res <- stats::kmeans(data_df, centers = nc,
-						 iter.max = iter_max, nstart = nstart)
+								iter.max = iter_max, nstart = nstart)
 
 	return(list(
 		kmeans   = kmeans_res,
@@ -543,34 +589,53 @@ summaryClusters <- function(df) {
 }
 
 
-#' Reorder clusters by descending yellowfin fraction
+#' Reorder clusters by descending yellowfin catch or fraction
 #'
-#' Renumbers cluster labels so that cluster 1 has the highest proportion of
-#' yellowfin in its catch, cluster 2 the second highest, and so on. Ensures
-#' consistent, interpretable ordering across runs.
+#' Renumbers cluster labels so that cluster 1 ranks highest on the chosen
+#' yellowfin criterion, cluster 2 second, and so on. Ensures consistent,
+#' interpretable ordering across runs.
 #'
-#' @param df A dataframe with columns `cluster`, `yft_n`, and `total_n`.
+#' @param df A dataframe with a `cluster` column, plus `yft_w` when
+#'   `by = "yft_w"`, or `yft_n` and `total_n` when `by = "yft_frac"`.
+#' @param by Ordering criterion, one of:
+#'   \describe{
+#'     \item{`"yft_w"`}{(default) total yellowfin catch in weight,
+#'       `sum(yft_w)` (missing values ignored).}
+#'     \item{`"yft_frac"`}{yellowfin fraction of the cluster's catch in
+#'       number, `sum(yft_n) / sum(total_n)`.}
+#'   }
 #'
 #' @return The input dataframe with `cluster` replaced by a factor ordered
-#'   by descending yellowfin fraction.
+#'   by the chosen criterion, descending. The original labels, in their new
+#'   order, are stored in `attr(, "old_ids")`: new label `i` is old label
+#'   `old_ids[i]`.
 #'
 #' @examples
-#' \dontrun{
-#' EC_clean$cluster <- assignClusters(as.data.frame(pca_full),
-#'                                    as.data.frame(kmeans_full$centers))
-#' EC_clustered <- orderClusters(EC_clean)
-#' }
+#' df <- data.frame(cluster = c(1, 1, 2, 3),
+#'                  yft_n = c(10, 5, 40, 2), total_n = c(20, 20, 50, 10),
+#'                  yft_w = c(1, 1, 3, 9))
+#' attr(orderClusters(df), "old_ids")                    # by yellowfin weight
+#' attr(orderClusters(df, by = "yft_frac"), "old_ids")   # by yellowfin fraction
 #'
 #' @family clustering utilities
 #' @export
-orderClusters <- function(df) {
+orderClusters <- function(df, by = c("yft_w", "yft_frac")) {
+	by   <- match.arg(by)
+	need <- switch(by, yft_frac = c("cluster", "yft_n", "total_n"),
+				   yft_w = c("cluster", "yft_w"))
+	missing_cols <- setdiff(need, names(df))
+	if (length(missing_cols) > 0)
+		stop("orderClusters(by = \"", by, "\"): missing column(s): ",
+			 paste(missing_cols, collapse = ", "))
+
 	lev  <- sort(unique(df$cluster))
 	g    <- factor(df$cluster, levels = lev)
-	yft  <- vapply(split(df$yft_n,   g), sum, numeric(1))
-	tot  <- vapply(split(df$total_n, g), sum, numeric(1))
-	frac <- yft / tot
+	score <- switch(by,
+					yft_frac = vapply(split(df$yft_n,   g), sum, numeric(1)) /
+						vapply(split(df$total_n, g), sum, numeric(1)),
+					yft_w    = vapply(split(df$yft_w,   g), sum, numeric(1), na.rm = TRUE))
 	## order() is stable, matching dplyr::arrange(desc(.))
-	old_ids <- lev[order(frac, decreasing = TRUE)]
+	old_ids <- lev[order(score, decreasing = TRUE)]
 	new_ids <- seq_along(old_ids)
 	df$cluster <- factor(new_ids[match(df$cluster, old_ids)], levels = new_ids)
 	attr(df, "old_ids") <- old_ids

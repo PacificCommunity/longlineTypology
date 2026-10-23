@@ -35,6 +35,7 @@ pcaScale(df, method = "arcsine")
 }
 \seealso{
 Other clustering utilities:
+\code{\link[=applyScaleParams]{applyScaleParams()}},
 \code{\link[=assignClusters]{assignClusters()}},
 \code{\link[=customKmeans]{customKmeans()}},
 \code{\link[=customPCA]{customPCA()}},
