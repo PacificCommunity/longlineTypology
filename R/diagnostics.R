@@ -439,12 +439,25 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 #'     scatter of all rows ([plotPCA()]).}
 #'   \item{`"gap"`}{gap profiles of the replicates ([plotGapSet()]) and the
 #'     number of replicates selecting each K.}
+#'   \item{`"centroids"`}{per K, variability of the replicate centroids
+#'     around the full-fit centroids ([centroidVariability()]).}
+#'   \item{`"jaccard"`}{per K, Jaccard stability of each cluster across the
+#'     replicate fits, fit years ([jaccardStability()]).}
+#'   \item{`"silhouette"`}{per K, silhouette widths on subsamples of the
+#'     replicate samples, fit years ([silhouetteStats()]); with
+#'     `null_silhouette = TRUE`, compared with a null reference.}
 #'   \item{`"varimp"`}{per K, variable importance of each cluster
-#'     ([varImportance()]) on subsamples of the replicate samples of the fit
-#'     window ([subsampleReplicates()]).}
+#'     ([varImportance()]) on the same subsamples as the silhouette.}
 #'   \item{`"vardist"`}{per K, distribution of the clustering variables by
 #'     cluster, all rows ([plotClusterVar()]).}
+#'   \item{`"temporal"`}{per K, each cluster's share of each year's rows,
+#'     fit years ([temporalStability()]).}
 #' }
+#'
+#' The subsamples of the silhouette and the variable importance are drawn
+#' once per K from the replicate samples of the gap statistic
+#' (`diagnostics$sample_indices`, fit years) with [subsampleReplicates()],
+#' seed `seed + K`, so both sections use the same rows.
 #'
 #' @inheritParams fitRows
 #' @param data `NULL` (default) to reload the data from
@@ -454,8 +467,14 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 #' @param k Values of K reported in the per-K sections. `NULL` (default)
 #'   reports every K of the diagnostics.
 #' @param output_file Path of the PDF.
-#' @param varimp_size,varimp_seed Size of the subsamples and seed of the
-#'   variable importance (the seed for K is `varimp_seed + K`).
+#' @param subsample_size Rows per subsample for the silhouette and the
+#'   variable importance (distance matrices grow as the square of it).
+#' @param seed Seed of the subsamples, random forests and null silhouette
+#'   (`seed + K` for K).
+#' @param null_silhouette Compare the silhouette with a null reference
+#'   (slow: `n_null` kmeans fits per K). Default `FALSE`.
+#' @param n_null Number of null datasets when `null_silhouette = TRUE`.
+#' @param share_threshold Passed to [temporalStability()] as `threshold`.
 #' @param var_limits Passed to [plotClusterVar()] as `limits`.
 #' @param title Title of the report.
 #' @param quiet Passed to [rmarkdown::render()].
@@ -472,14 +491,17 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 #' @family diagnostics
 #' @export
 clusterReport <- function(diagnostics, data = NULL,
-						  sections = c("pca", "gap", "varimp", "vardist"),
+						  sections = c("pca", "gap", "centroids", "jaccard", "silhouette",
+									   "varimp", "vardist", "temporal"),
 						  k = NULL, output_file = "cluster_report.pdf",
-						  varimp_size = 3000, varimp_seed = 123,
+						  subsample_size = 3000, seed = 123,
+						  null_silhouette = FALSE, n_null = 100, share_threshold = 0.01,
 						  var_limits = NULL, title = "Clustering diagnostics report",
 						  quiet = TRUE) {
 	if (!requireNamespace("rmarkdown", quietly = TRUE))
 		stop("clusterReport() needs the 'rmarkdown' package.")
-	sections <- match.arg(sections, c("pca", "gap", "varimp", "vardist"), several.ok = TRUE)
+	sections <- match.arg(sections, c("pca", "gap", "centroids", "jaccard", "silhouette",
+									  "varimp", "vardist", "temporal"), several.ok = TRUE)
 	if ("varimp" %in% sections && !requireNamespace("randomForest", quietly = TRUE))
 		stop("The 'varimp' section needs the 'randomForest' package.")
 
@@ -512,9 +534,12 @@ clusterReport <- function(diagnostics, data = NULL,
 	env$fit_rows     <- fit_rows
 	env$sections     <- sections
 	env$ks           <- ks
-	env$varimp_size  <- varimp_size
-	env$varimp_seed  <- varimp_seed
-	env$var_limits   <- var_limits
+	env$subsample_size  <- subsample_size
+	env$seed            <- seed
+	env$null_silhouette <- null_silhouette
+	env$n_null          <- n_null
+	env$share_threshold <- share_threshold
+	env$var_limits      <- var_limits
 
 	output_file <- normalizePath(output_file, mustWork = FALSE)
 	out <- rmarkdown::render(file.path(work, "cluster_report.Rmd"),

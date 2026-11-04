@@ -5,22 +5,92 @@
 
 ```{r}
 ## Ordered labels (diagnostics$cluster_reorder) for this K, all rows
-cl_k <- clusterLabels(diagnostics, k)
+cl_k     <- clusterLabels(diagnostics, k)
+cl_fit   <- cl_k[fit_rows]
+k_num    <- as.numeric(k)
+seed_k   <- seed + as.integer(k)
+n_rep    <- length(diagnostics$kmeans_res)
+support  <- diagnostics$freq_df$freq[diagnostics$freq_df$n_clusters == k_num]
+if (!length(support)) support <- 0
+km       <- diagnostics$kmeans_full[[k]]
+
+## Subsamples shared by the silhouette and the variable importance
+samples_k <- if (any(c("silhouette", "varimp") %in% sections) && k_num > 1)
+	subsampleReplicates(diagnostics$sample_indices, subsample_size, seed = seed_k)
+sub_size  <- if (!is.null(samples_k)) length(samples_k[[1]])
 ```
 
-```{r, results = "asis", eval = "varimp" %in% sections && as.numeric(k) > 1}
-samples_k <- subsampleReplicates(diagnostics$sample_indices, varimp_size,
-								 seed = varimp_seed + as.integer(k))
+Replicates selecting K = `r k`: `r support` of `r n_rep`. Between-cluster / total sum of squares of the full fit: `r round(km$betweenss / km$totss, 3)`.
+
+```{r, results = "asis", eval = "centroids" %in% sections}
+cat("\n\n## Centroid variability\n\n")
+cv_k <- centroidVariability(diagnostics, k, scores_fit)
+if (is.null(cv_k$stats)) {
+	cat("No replicate selected K = ", k, ": no centroid variability.\n\n", sep = "")
+} else {
+	cat("Centroids of the ", cv_k$n_replicates, " of ", cv_k$n_total,
+		" replicates that selected K = ", k, ", each matched one to one with the ",
+		"full-fit centroids (Hungarian algorithm). `rmse`: root-mean-square deviation of the ",
+		"replicate centroids from the full-fit centroid (spread and bias); `nrmse`: `rmse` ",
+		"in standard deviations of the PC over the fit years (", fit_lab, "). ",
+		"Sorted by decreasing `nrmse` (least stable first).\n\n", sep = "")
+	print(knitr::kable(cv_k$stats, row.names = FALSE, digits = 3))
+}
+```
+
+```{r, fig.height = 4.5, eval = "centroids" %in% sections && !is.null(cv_k$stats)}
+plotCentroidVariability(cv_k)
+```
+
+```{r, results = "asis", eval = "jaccard" %in% sections && k_num > 1}
+cat("\n\n## Jaccard stability\n\n")
+cat("The rows of the fit years (", fit_lab, ") are assigned to the nearest centroid of ",
+	"each of the ", n_rep, " replicate fits (whatever K each selected). For each cluster, ",
+	"stability in one replicate is the best overlap |A and B| / |A or B| with any ",
+	"replicate cluster. `jaccard`: mean over replicates; `jaccard_min`: worst replicate. ",
+	"Hennig (2007): below 0.6 the cluster dissolves, above 0.75 it is stable ",
+	"(dashed lines).\n\n", sep = "")
+js_k <- jaccardStability(diagnostics, scores_fit, cl_fit)
+print(knitr::kable(js_k$summary, row.names = FALSE, digits = 3))
+```
+
+```{r, fig.height = 3.5, eval = "jaccard" %in% sections && k_num > 1}
+plotJaccard(js_k)
+```
+
+```{r, results = "asis", eval = "silhouette" %in% sections && k_num > 1}
+cat("\n\n## Silhouette\n\n")
+ss_k <- silhouetteStats(scores_fit, cl_fit, samples_k,
+						n_null = if (null_silhouette) n_null else 0, seed = seed_k)
+cat("Silhouette widths on ", ss_k$n_samples, " subsamples of ", sub_size,
+	" rows of the replicate samples, fit years (", fit_lab, "). The full distance ",
+	"matrix is too large, so values vary between subsamples. ",
+	"Points: mean per cluster, bars: +/- 1 sd, solid line: mean over all points",
+	if (!is.null(ss_k$null)) ", dashed line: mean of the null reference", ".\n\n", sep = "")
+print(knitr::kable(ss_k$per_cluster, row.names = FALSE, digits = 3))
+cat("\n\nMean silhouette: ", round(ss_k$overall, 3), "\n\n", sep = "")
+if (!is.null(ss_k$null))
+	cat("Null reference: ", ss_k$null$n, " datasets of ", ss_k$null$size,
+		" points drawn uniformly in the bounding box of the fit-year PC scores, ",
+		"clustered by kmeans at K = ", k, ". Null mean: ", round(ss_k$null$mean, 3),
+		" (sd ", signif(ss_k$null$sd, 2), "), z = ", round(ss_k$null$z, 1), ".\n\n", sep = "")
+```
+
+```{r, fig.height = 3.5, eval = "silhouette" %in% sections && k_num > 1}
+plotSilhouette(ss_k)
+```
+
+```{r, results = "asis", eval = "varimp" %in% sections && k_num > 1}
 cat("\n\n## Variable importance\n\n")
-cat("One-vs-rest random forests (each cluster against all others) on ", length(samples_k),
-	" subsamples of up to ", varimp_size, " rows of the replicate samples, fit years (",
+cat("One-vs-rest random forests (each cluster against all others) on the ",
+	length(samples_k), " subsamples of the silhouette (", sub_size, " rows, fit years ",
 	fit_lab, "). Mean importance over the subsamples.\n\n", sep = "")
 vi_k <- varImportance(data[fit_rows, , drop = FALSE], diagnostics$pca_select,
-					  cl_k[fit_rows], samples = samples_k, seed = varimp_seed + as.integer(k))
+					  cl_fit, samples = samples_k, seed = seed_k)
 vi_plots <- plotVarImportance(vi_k, variable_order = diagnostics$pca_select)
 ```
 
-```{r, fig.height = 3.5, eval = "varimp" %in% sections && as.numeric(k) > 1}
+```{r, fig.height = 3.5, eval = "varimp" %in% sections && k_num > 1}
 for (p in vi_plots) print(p)
 ```
 
@@ -33,4 +103,22 @@ cat("All years (", all_lab, "), including rows outside the fit years (", fit_lab
 
 ```{r, eval = "vardist" %in% sections}
 plotClusterVar(data, diagnostics$pca_select, cl_k, limits = var_limits)
+```
+
+```{r, results = "asis", eval = "temporal" %in% sections}
+cat("\n\n## Temporal stability\n\n")
+ts_k <- temporalStability(years_fit, cl_fit, threshold = share_threshold)
+cat("Share of each year's rows in each cluster, fit years (", fit_lab, "). ",
+	"Coverage: fraction of years with share >= ", 100 * share_threshold, "%. ",
+	"Max gap: longest run of years below it between the first and the last year above it ",
+	"(a cluster that disappears and reappears; a late start or an early end is not counted). ",
+	"Median jump: median |log(share[y+1] / share[y])| (0.1 is about 10% change per year).\n\n",
+	sep = "")
+print(knitr::kable(ts_k$summary, row.names = FALSE, digits = c(0, 3, 2, 0, 3),
+				   col.names = c("Cluster", "Mean share", "Coverage", "Max gap (yr)",
+								 "Median jump")))
+```
+
+```{r, fig.height = 4, eval = "temporal" %in% sections}
+plotTemporalShare(ts_k)
 ```

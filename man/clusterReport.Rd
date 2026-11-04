@@ -7,11 +7,15 @@
 clusterReport(
   diagnostics,
   data = NULL,
-  sections = c("pca", "gap", "varimp", "vardist"),
+  sections = c("pca", "gap", "centroids", "jaccard", "silhouette", "varimp", "vardist",
+    "temporal"),
   k = NULL,
   output_file = "cluster_report.pdf",
-  varimp_size = 3000,
-  varimp_seed = 123,
+  subsample_size = 3000,
+  seed = 123,
+  null_silhouette = FALSE,
+  n_null = 100,
+  share_threshold = 0.01,
   var_limits = NULL,
   title = "Clustering diagnostics report",
   quiet = TRUE
@@ -32,8 +36,18 @@ reports every K of the diagnostics.}
 
 \item{output_file}{Path of the PDF.}
 
-\item{varimp_size, varimp_seed}{Size of the subsamples and seed of the
-variable importance (the seed for K is \code{varimp_seed + K}).}
+\item{subsample_size}{Rows per subsample for the silhouette and the
+variable importance (distance matrices grow as the square of it).}
+
+\item{seed}{Seed of the subsamples, random forests and null silhouette
+(\code{seed + K} for K).}
+
+\item{null_silhouette}{Compare the silhouette with a null reference
+(slow: \code{n_null} kmeans fits per K). Default \code{FALSE}.}
+
+\item{n_null}{Number of null datasets when \code{null_silhouette = TRUE}.}
+
+\item{share_threshold}{Passed to \code{\link[=temporalStability]{temporalStability()}} as \code{threshold}.}
 
 \item{var_limits}{Passed to \code{\link[=plotClusterVar]{plotClusterVar()}} as \code{limits}.}
 
@@ -57,12 +71,25 @@ Sections, in report order:
 scatter of all rows (\code{\link[=plotPCA]{plotPCA()}}).}
 \item{\code{"gap"}}{gap profiles of the replicates (\code{\link[=plotGapSet]{plotGapSet()}}) and the
 number of replicates selecting each K.}
+\item{\code{"centroids"}}{per K, variability of the replicate centroids
+around the full-fit centroids (\code{\link[=centroidVariability]{centroidVariability()}}).}
+\item{\code{"jaccard"}}{per K, Jaccard stability of each cluster across the
+replicate fits, fit years (\code{\link[=jaccardStability]{jaccardStability()}}).}
+\item{\code{"silhouette"}}{per K, silhouette widths on subsamples of the
+replicate samples, fit years (\code{\link[=silhouetteStats]{silhouetteStats()}}); with
+\code{null_silhouette = TRUE}, compared with a null reference.}
 \item{\code{"varimp"}}{per K, variable importance of each cluster
-(\code{\link[=varImportance]{varImportance()}}) on subsamples of the replicate samples of the fit
-window (\code{\link[=subsampleReplicates]{subsampleReplicates()}}).}
+(\code{\link[=varImportance]{varImportance()}}) on the same subsamples as the silhouette.}
 \item{\code{"vardist"}}{per K, distribution of the clustering variables by
 cluster, all rows (\code{\link[=plotClusterVar]{plotClusterVar()}}).}
+\item{\code{"temporal"}}{per K, each cluster's share of each year's rows,
+fit years (\code{\link[=temporalStability]{temporalStability()}}).}
 }
+
+The subsamples of the silhouette and the variable importance are drawn
+once per K from the replicate samples of the gap statistic
+(\code{diagnostics$sample_indices}, fit years) with \code{\link[=subsampleReplicates]{subsampleReplicates()}},
+seed \code{seed + K}, so both sections use the same rows.
 }
 \examples{
 \dontrun{

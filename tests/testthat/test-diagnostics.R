@@ -89,7 +89,7 @@ test_that("clusterReport renders a PDF from the diagnostics alone", {
 	m   <- mockDiagnostics()
 	out <- tempfile(fileext = ".pdf")
 	clusterReport(m$diagnostics, k = names(m$diagnostics$kmeans_full)[1],
-				  output_file = out, varimp_size = 50)
+				  output_file = out, subsample_size = 50, null_silhouette = TRUE, n_null = 3)
 	expect_true(file.exists(out))
 })
 
