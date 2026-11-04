@@ -1,0 +1,36 @@
+
+\newpage
+
+# K = `r k`
+
+```{r}
+## Ordered labels (diagnostics$cluster_reorder) for this K, all rows
+cl_k <- clusterLabels(diagnostics, k)
+```
+
+```{r, results = "asis", eval = "varimp" %in% sections && as.numeric(k) > 1}
+samples_k <- subsampleReplicates(diagnostics$sample_indices, varimp_size,
+								 seed = varimp_seed + as.integer(k))
+cat("\n\n## Variable importance\n\n")
+cat("One-vs-rest random forests (each cluster against all others) on ", length(samples_k),
+	" subsamples of up to ", varimp_size, " rows of the replicate samples, fit years (",
+	fit_lab, "). Mean importance over the subsamples.\n\n", sep = "")
+vi_k <- varImportance(data[fit_rows, , drop = FALSE], diagnostics$pca_select,
+					  cl_k[fit_rows], samples = samples_k, seed = varimp_seed + as.integer(k))
+vi_plots <- plotVarImportance(vi_k, variable_order = diagnostics$pca_select)
+```
+
+```{r, fig.height = 3.5, eval = "varimp" %in% sections && as.numeric(k) > 1}
+for (p in vi_plots) print(p)
+```
+
+```{r, results = "asis", eval = "vardist" %in% sections}
+cat("\n\n## Variable distributions by cluster\n\n")
+cat("All years (", all_lab, "), including rows outside the fit years (", fit_lab,
+	") assigned to the nearest centroid. Boxes: interquartile range and median, ",
+	"each variable rescaled to [0, 1].\n\n", sep = "")
+```
+
+```{r, eval = "vardist" %in% sections}
+plotClusterVar(data, diagnostics$pca_select, cl_k, limits = var_limits)
+```

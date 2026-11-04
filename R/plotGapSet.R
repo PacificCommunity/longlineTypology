@@ -7,7 +7,7 @@
 #' @param file optional png path; if NULL, draws to the current device.
 #' @return invisibly, the selected k per replicate and their frequency table.
 #' @export
-## ---- plotGapSet(): overlay the 15 gap profiles and show the selection rule ----
+## ---- plotGapSet(): overlay the gap profiles and show the selection rule ----
 ## gap_stat is the list built by the vignette loop; each element has columns
 ## logW, E.logW, gap, SE.sim with rownames giving k. Base graphics only --
 ## no continuous colour scale, so it is unaffected by the broken farver.
@@ -20,7 +20,7 @@ plotGapSet <- function(gap_stat, SE.factor = 1, file = NULL) {
 
   ## panel 1 -- the gap curves themselves
   graphics::matplot(ks, G, type = "l", lty = 1, col = "#00000030", lwd = 1.5,
-          xlab = "k", ylab = "Gap(k)", main = "Gap profiles, 15 replicates")
+          xlab = "k", ylab = "Gap(k)", main = sprintf("Gap profiles, %d replicates", length(gap_stat)))
   graphics::lines(ks, rowMeans(G), col = "firebrick", lwd = 2.5)
   graphics::arrows(ks, rowMeans(G) - rowMeans(S), ks, rowMeans(G) + rowMeans(S),
          angle = 90, code = 3, length = 0.03, col = "firebrick")

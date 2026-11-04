@@ -1,0 +1,59 @@
+---
+title: "`r params$title`"
+params:
+  title: "Clustering diagnostics report"
+output:
+  pdf_document:
+    toc: true
+geometry: "top=1in, bottom=1in, left=0.75in, right=0.75in"
+---
+
+```{r setup, include = FALSE}
+## Rendered by clusterReport(), which puts these objects in the rendering
+## environment: diagnostics, data, scores, fit_rows, sections, ks,
+## varimp_size, varimp_seed, var_limits.
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+					  fig.width = 6.5, fig.height = 5)
+library(longlineTypology)
+
+fy      <- if (is.null(diagnostics$fit_years)) c(1990, Inf) else diagnostics$fit_years
+fit_lab <- if (is.finite(fy[2])) paste(fy[1], "to", fy[2]) else
+	paste(fy[1], "to the end of the data")
+all_lab <- paste(range(as.integer(format(data$ymd, "%Y"))), collapse = " to ")
+```
+
+Scenario: `r diagnostics$scenario`. Clustering variables: `r paste(diagnostics$pca_select, collapse = ", ")`. Principal components used: `r diagnostics$n_components`. Fit years: `r fit_lab`.
+
+```{r pca, results = "asis", eval = "pca" %in% sections}
+cat("\n\n# PCA\n\n")
+cat("Scaling and PCA fitted on the fit years (", fit_lab, "). Scatter plot: all rows (",
+	all_lab, ") projected on that PCA.\n\n", sep = "")
+print(knitr::kable(as.data.frame(diagnostics$pca_res$rotation), digits = 3))
+pca_plots <- plotPCA(diagnostics$pca_res, scores)
+```
+
+```{r pca_plots, eval = "pca" %in% sections}
+for (p in pca_plots) print(p)
+```
+
+```{r gap_head, results = "asis", eval = "gap" %in% sections}
+cat("\n\n# Gap statistic\n\n")
+cat("Replicate samples drawn from the fit years (", fit_lab, ").\n\n", sep = "")
+```
+
+```{r gap, fig.height = 4, eval = "gap" %in% sections}
+plotGapSet(diagnostics$gap_stat)
+```
+
+```{r gap_table, eval = "gap" %in% sections}
+fd <- diagnostics$freq_df
+knitr::kable(fd[order(-fd$freq), ], row.names = FALSE,
+			 col.names = c("K", "Replicates selecting K"))
+```
+
+```{r per_k, results = "asis", eval = any(c("varimp", "vardist") %in% sections)}
+child <- "cluster_report_k.Rmd"   # next to this file (knitr runs in its folder)
+for (k in ks) {
+	cat(knitr::knit_child(child, envir = environment(), quiet = TRUE), sep = "\n")
+}
+```
