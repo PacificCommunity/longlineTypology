@@ -23,15 +23,16 @@ shifts) and \code{context} (all variables of the cluster around the change).
 Plots of one breakpoint inspection
 }
 \seealso{
-Other breakpoint analysis v2:
-\code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}},
+Other breakpoint analysis:
+\code{\link[=aggregateClusterTimeSeries]{aggregateClusterTimeSeries()}},
+\code{\link[=analyseBreakpoints]{analyseBreakpoints()}},
 \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
 \code{\link[=breakpointContext]{breakpointContext()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
 \code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
-\code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotBreakpoints]{plotBreakpoints()}},
 \code{\link[=rankBreakpoints]{rankBreakpoints()}},
 \code{\link[=spatialMonthTable]{spatialMonthTable()}},
 \code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }
-\concept{breakpoint analysis v2}
+\concept{breakpoint analysis}

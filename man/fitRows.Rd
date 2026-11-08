@@ -7,8 +7,8 @@
 fitRows(diagnostics, data)
 }
 \arguments{
-\item{diagnostics}{The diagnostics list saved by the clustering vignette,
-or the path to \code{cluster_diagnostics.RDS}.}
+\item{diagnostics}{The diagnostics list returned by \code{\link[=runClustering]{runClustering()}},
+or the path to the \code{cluster_diagnostics.RDS} file it saved.}
 
 \item{data}{The processed dataset used for the clustering (same rows, same
 order), with a \code{Date} column \code{ymd}.}

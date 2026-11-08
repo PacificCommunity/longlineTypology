@@ -2,74 +2,83 @@
 % Please edit documentation in R/breakpoints.R
 \name{analyseBreakpoints}
 \alias{analyseBreakpoints}
-\title{Full breakpoint analysis for one (cluster, variable) time series}
+\title{Detect and classify changes in one cluster time series}
 \usage{
 analyseBreakpoints(
   dates,
   x,
+  variable,
   mean_len,
-  df,
-  cluster_id,
-  skip_age = FALSE,
-  window_months = 6,
+  detector = c("envcpt", "pelt"),
+  detector_args = list(),
+  deseason = TRUE,
+  window = 72,
+  alpha = 0.1,
+  abrupt_months = NULL,
+  transient_tau_frac = 0.5,
+  spatial_table = NULL,
+  spatial_window = 12,
+  spatial_alpha = 0.05,
   Linf = 150.3,
   K = 0.442,
-  t0 = -0.244,
-  movement_strictness = "moderate",
-  ...
+  t0 = -0.244
 )
 }
 \arguments{
-\item{dates}{Date vector for the analysis series.}
+\item{dates}{Date vector (monthly).}
 
-\item{x}{Numeric vector, the variable to detect breakpoints in.}
+\item{x}{Numeric series (\code{CPUE} is analysed on the log scale).}
 
-\item{mean_len}{Numeric vector of mean length, aligned to \code{dates}; used
-for age validation. Ignored if \code{skip_age = TRUE}.}
+\item{variable}{\code{"CPUE"}, \code{"mean_len"} or \code{"mean_hbf"}.}
 
-\item{df}{Data frame with \code{cluster}, \code{date}, \code{longitude}, \code{latitude}
-(raw, un-summarised fisheries data); used for spatial validation.}
+\item{mean_len}{Mean length aligned to \code{dates}; sets the cohort timescale.}
 
-\item{cluster_id}{Cluster identifier, for spatial validation.}
+\item{detector}{\code{"envcpt"} (default) or \code{"pelt"}.}
 
-\item{skip_age}{Logical; skip age validation for this variable (e.g.
-\code{mean_hbf}). Default \code{FALSE}.}
+\item{detector_args}{List of extra arguments for the candidate generator.}
 
-\item{window_months, Linf, K, t0}{Passed to \code{\link[=validateBreakpointAge]{validateBreakpointAge()}}.}
+\item{deseason}{Remove the monthly climatology first. Default \code{TRUE}.}
 
-\item{movement_strictness}{Passed to \code{\link[=validateBreakpointSpatial]{validateBreakpointSpatial()}}.}
+\item{window}{Half-width (months) of the local fit. Default 72.}
 
-\item{...}{Passed to \code{\link[=detectChangepoints]{detectChangepoints()}}.}
+\item{alpha}{Significance level of the change test. Default 0.1 (EnvCpt's
+own model choice is the main false-positive filter; see report).}
+
+\item{abrupt_months}{\code{NULL} = cohort timescale from \code{mean_len}; a number =
+fixed threshold (months).}
+
+\item{transient_tau_frac}{A pulse decaying with time constant <= this x
+T_c is labelled "transient". Default 0.5.}
+
+\item{spatial_table}{\code{\link[=spatialMonthTable]{spatialMonthTable()}} for this cluster, or \code{NULL} to
+skip the composition / relocation test.}
+
+\item{spatial_window, spatial_alpha}{Window (months) and significance level
+of that test.}
+
+\item{Linf, K, t0}{Growth parameters for \code{\link[=vbAgeMonths]{vbAgeMonths()}} (default:
+yellowfin, Farley et al. 2020).}
 }
 \value{
-\code{NULL} if \code{\link[=detectChangepoints]{detectChangepoints()}} finds too little data; a 0-row
-data frame if it runs but finds no candidate breakpoints; otherwise one
-row per candidate breakpoint with columns \code{bp_date}, \code{age_limit_days},
-\code{phase_days}, \code{passed_age}, \code{centroid_distance}, \code{spatial_overlap},
-\code{spread_change_ratio}, \code{passed_spatial}, \code{valid}. A breakpoint with no
-spatial test result (dropped by \code{\link[=validateBreakpointSpatial]{validateBreakpointSpatial()}}) gets
-\code{valid = FALSE}, matching the original's behaviour of only counting a
-breakpoint valid when the spatial test explicitly passed.
+Data frame, one row per significant change (0 rows if none).
+\code{cand_date} is the EnvCpt / PELT candidate the change was characterised
+around (used by \code{\link[=inspectBreakpoint]{inspectBreakpoint()}} to reproduce it).
 }
 \description{
-Orchestrates \code{\link[=detectChangepoints]{detectChangepoints()}}, \code{\link[=validateBreakpointAge]{validateBreakpointAge()}}, and
-\code{\link[=validateBreakpointSpatial]{validateBreakpointSpatial()}} into a single tidy result. This -- not a
-\code{bp_results}-style list with embedded copies of the series -- is what
-should be saved: it holds only breakpoint dates and validation outcomes.
-Reconstructing a plot needs this data frame plus the original time
-series, via \code{\link[=plotBreakpoints]{plotBreakpoints()}}.
+See the file header of R/breakpoints.R and breakpoint_report.qmd for the
+method, its calibration and detection limits.
 }
 \seealso{
-Other breakpoint analysis utilities:
-\code{\link[=ageFromLength]{ageFromLength()}},
+Other breakpoint analysis:
 \code{\link[=aggregateClusterTimeSeries]{aggregateClusterTimeSeries()}},
-\code{\link[=calculateClusterMovementBaseline]{calculateClusterMovementBaseline()}},
-\code{\link[=calculateDistance]{calculateDistance()}},
-\code{\link[=calculateFleetSpread]{calculateFleetSpread()}},
-\code{\link[=calculateSpatialOverlap]{calculateSpatialOverlap()}},
-\code{\link[=detectChangepoints]{detectChangepoints()}},
-\code{\link[=evaluateBreakpointMovement]{evaluateBreakpointMovement()}},
-\code{\link[=validateBreakpointAge]{validateBreakpointAge()}},
-\code{\link[=validateBreakpointSpatial]{validateBreakpointSpatial()}}
+\code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
+\code{\link[=breakpointContext]{breakpointContext()}},
+\code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
+\code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
+\code{\link[=plotBreakpoints]{plotBreakpoints()}},
+\code{\link[=plotInspection]{plotInspection()}},
+\code{\link[=rankBreakpoints]{rankBreakpoints()}},
+\code{\link[=spatialMonthTable]{spatialMonthTable()}},
+\code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }
-\concept{breakpoint analysis utilities}
+\concept{breakpoint analysis}

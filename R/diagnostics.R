@@ -1,8 +1,7 @@
 ## R/diagnostics.R -- building blocks of the clustering diagnostics report.
 ##
-## Every function works from the diagnostics object saved by the clustering
-## vignette (cluster_diagnostics.RDS) and the processed dataset used to fit
-## it. Computation and plotting are separate: compute functions return data
+## Every function works from the diagnostics object of runClustering()
+## (cluster_diagnostics.RDS) and the processed dataset used to fit it. Computation and plotting are separate: compute functions return data
 ## frames, plot functions return ggplot objects (or draw with base graphics
 ## for plotGapSet()), and nothing is printed or written to disk.
 ## clusterReport() assembles them into a PDF.
@@ -24,7 +23,7 @@ utils::globalVariables(c("cluster", "variable", "value", "metric", "m"))
 	miss <- setdiff(need, names(diagnostics))
 	if (length(miss))
 		stop("diagnostics is missing element(s): ", paste(miss, collapse = ", "),
-			 ". Rerun the clustering vignette.")
+			 ". Rerun runClustering().")
 	diagnostics
 }
 
@@ -62,8 +61,8 @@ utils::globalVariables(c("cluster", "variable", "value", "metric", "m"))
 #' Diagnostics files saved before `fit_years` existed were fitted on 1990
 #' onwards, which is used as the default.
 #'
-#' @param diagnostics The diagnostics list saved by the clustering vignette,
-#'   or the path to `cluster_diagnostics.RDS`.
+#' @param diagnostics The diagnostics list returned by [runClustering()],
+#'   or the path to the `cluster_diagnostics.RDS` file it saved.
 #' @param data The processed dataset used for the clustering (same rows, same
 #'   order), with a `Date` column `ymd`.
 #'
@@ -105,7 +104,7 @@ clusterLabels <- function(diagnostics, k, reorder = TRUE) {
 	if (!reorder) return(raw)
 	ro <- diagnostics$cluster_reorder[[as.character(k)]]
 	if (is.null(ro)) stop("No cluster_reorder for K = ", k,
-						  "; use reorder = FALSE or rerun the clustering vignette.")
+						  "; use reorder = FALSE or rerun runClustering().")
 	if (!setequal(ro$old, unique(raw)))
 		stop("cluster_reorder for K = ", k, " does not match the cluster_k", k, " labels.")
 	as.integer(ro$new[match(raw, ro$old)])
@@ -485,7 +484,7 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 #' \dontrun{
 #' clusterReport("cluster_outputs/cluster_diagnostics.RDS",
 #'               sections = c("pca", "gap", "varimp"),
-#'               output_file = "report_sp_hbf_latabs.pdf")
+#'               output_file = "cluster_report.pdf")
 #' }
 #'
 #' @family diagnostics

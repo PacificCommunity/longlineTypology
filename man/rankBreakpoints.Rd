@@ -18,15 +18,16 @@ Order: \code{unexplained}, \code{switch}, \code{ambiguous}, \code{composition}, 
 events) come after all of these. Ties by cluster, variable and date.
 }
 \seealso{
-Other breakpoint analysis v2:
-\code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}},
+Other breakpoint analysis:
+\code{\link[=aggregateClusterTimeSeries]{aggregateClusterTimeSeries()}},
+\code{\link[=analyseBreakpoints]{analyseBreakpoints()}},
 \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
 \code{\link[=breakpointContext]{breakpointContext()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
 \code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
-\code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotBreakpoints]{plotBreakpoints()}},
 \code{\link[=plotInspection]{plotInspection()}},
 \code{\link[=spatialMonthTable]{spatialMonthTable()}},
 \code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }
-\concept{breakpoint analysis v2}
+\concept{breakpoint analysis}

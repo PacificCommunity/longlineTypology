@@ -38,7 +38,7 @@ the same settings; recomputed if \code{NULL}. It must contain \code{cand_date}.}
 
 \item{variables, group, hbf_abrupt_months, common_tol_months, common_min_share, mirror_min, spatial_window}{As in \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}}.}
 
-\item{detector, detector_args, deseason, window, alpha, transient_tau_frac, spatial_alpha, Linf, K, t0}{As in \code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}}.}
+\item{detector, detector_args, deseason, window, alpha, transient_tau_frac, spatial_alpha, Linf, K, t0}{As in \code{\link[=analyseBreakpoints]{analyseBreakpoints()}}.}
 }
 \value{
 A list of class \code{bpContext}.
@@ -48,18 +48,19 @@ Runs \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}} once 
 everything \code{\link[=inspectBreakpoint]{inspectBreakpoint()}} needs: the cluster series, the per-cluster
 spatial tables, the changes found and the settings used. Settings have
 the same names and defaults as in \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}} and
-\code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}}.
+\code{\link[=analyseBreakpoints]{analyseBreakpoints()}}.
 }
 \seealso{
-Other breakpoint analysis v2:
-\code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}},
+Other breakpoint analysis:
+\code{\link[=aggregateClusterTimeSeries]{aggregateClusterTimeSeries()}},
+\code{\link[=analyseBreakpoints]{analyseBreakpoints()}},
 \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
 \code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
-\code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotBreakpoints]{plotBreakpoints()}},
 \code{\link[=plotInspection]{plotInspection()}},
 \code{\link[=rankBreakpoints]{rankBreakpoints()}},
 \code{\link[=spatialMonthTable]{spatialMonthTable()}},
 \code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }
-\concept{breakpoint analysis v2}
+\concept{breakpoint analysis}

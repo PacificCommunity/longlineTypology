@@ -1,4 +1,3 @@
-## Base-R build: no dplyr, no rlang, no factoextra. See BASE-R-CHANGES.md.
 utils::globalVariables(c("PC1", "PC2", "k", "gap", "sd", "pct", "x", "y",
 						 "contrib", "varname", "col", "label"))
 
@@ -128,7 +127,7 @@ pcaScale <- function(select_dat, method = "zscore") {
 			mean     = vapply(select_dat, mean, numeric(1), na.rm = TRUE),
 			sd       = vapply(select_dat, function(x) {
 				s <- stats::sd(x, na.rm = TRUE)
-				if (is.na(s) || s == 0) 1 else s   # matches custom_scale()'s zero-variance branch
+				if (is.na(s) || s == 0) 1 else s   # zero variance: centred only, as in custom_scale()
 			}, numeric(1)),
 			row.names = NULL
 		)
@@ -150,7 +149,7 @@ pcaScale <- function(select_dat, method = "zscore") {
 #' `predict(<prcomp>, newdata = )`.
 #'
 #' Zero-variance columns were stored by [pcaScale()] with `sd = 1`, so they
-#' are centred only, as in the original fit.
+#' are centred only, as in the fit.
 #'
 #' @param df A dataframe containing every column named in
 #'   `scale_params$variable`. Other columns are returned unchanged.
@@ -232,7 +231,7 @@ customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 						  length(cumulative_var))
 	pca_res$no_var <- max(no_pca, 2)
 
-	## --- scree plot: replaces factoextra::fviz_eig() -------------------------
+	## --- scree plot ---------------------------------------------------------
 	scree <- data.frame(k = seq_along(variance_frac),
 						pct = variance_frac * 100)
 	p1 <- ggplot(scree, aes(x = factor(k), y = pct, group = 1)) +
@@ -244,9 +243,9 @@ customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 			 y = "% of explained variance") +
 		theme_minimal()
 
-	## --- variable plot: replaces factoextra::fviz_pca_var() ------------------
-	## Correlation circle. `contrib` is the contribution of each variable to the
-	## PC1-PC2 plane, eigenvalue-weighted, as factoextra defines it.
+	## --- variable plot ------------------------------------------------------
+	## Correlation circle. `contrib` is the eigenvalue-weighted contribution of
+	## each variable to the PC1-PC2 plane.
 	e12 <- eigenvalues[1] + eigenvalues[2]
 	vars <- data.frame(
 		varname = rownames(loadings),
@@ -255,11 +254,8 @@ customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 		contrib = (loadings$PC1^2 * eigenvalues[1] +
 				   	loadings$PC2^2 * eigenvalues[2]) / e12 * 100,
 		stringsAsFactors = FALSE)
-	## Colours are resolved here with grDevices::colorRampPalette() and fed
-	## through scale_colour_identity(), rather than scale_colour_gradientn().
-	## A continuous colour scale forces ggplot2 to load `farver` at plot
-	## CONSTRUCTION time, which fails on installs where farver predates R 4.0.
-	## Doing the interpolation ourselves keeps this function usable there.
+	## Colours interpolated with grDevices::colorRampPalette() and passed
+	## through scale_colour_identity(), so no continuous colour scale is needed.
 	pal <- grDevices::colorRampPalette(c("#00AFBB", "#E7B800", "#FC4E07"))(100)
 	rng <- range(vars$contrib)
 	idx <- if (diff(rng) > 0)
@@ -320,10 +316,6 @@ customPCA <- function(data_df, variance_threshold = 0.7, print_it = TRUE,
 #'
 #' A clean `theme_bw()`-based theme with sensible defaults: legend at the
 #' bottom, wide legend keys, and blank facet strip backgrounds.
-#'
-#' Reused as-is from `seafisheries::customTheme()` (R/plotting.R) — copied
-#' here rather than taken as a dependency, since this package is meant to
-#' stand alone from `seafisheries`.
 #'
 #' @param text_size Numeric; base text size in points. Default is 11.
 #'
@@ -393,12 +385,12 @@ customTheme <- function(text_size = 11) {
 #'
 #' @family clustering utilities
 #' @importFrom cluster clusGap maxSE
-#' @importFrom ggplot2 ggplot aes geom_point geom_errorbar geom_vline
+#' @importFrom ggplot2 ggplot aes geom_point geom_errorbar geom_vline .data
 #' @export
 customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 						 nstart = 1, d.power = 2, print_it = TRUE, ncores = 1) {
 
-	## --- amended gap statistic: exact O(n), no dist() ----------------------
+	## --- gap statistic: exact O(n), no dist() -------------------------------
 	## The W_k identity holds only for squared Euclidean distance, so fall
 	## back to cluster::clusGap() for any other d.power.
 	if (d.power == 2) {
@@ -467,11 +459,6 @@ customKmeans <- function(data_df, max_k = 15, random_set = 100, iter_max = 10,
 #' @family clustering utilities
 #' @export
 assignClusters <- function(df, centroids) {
-	# Rewritten from the original mutate()/pull() chain: that version relied
-	# on the magrittr "." placeholder inside mutate(cluster = apply(., 1, ...))
-	# to refer to the whole piped dataframe -- a feature specific to magrittr's
-	# %>%, with no base |> equivalent. Base R subsetting + apply() sidesteps
-	# the issue and drops the dplyr dependency for this function entirely.
 	sub_df <- df[, names(centroids), drop = FALSE]
 	apply(sub_df, 1, function(point) {
 		which.min(apply(centroids, 1, function(cent) {
@@ -516,9 +503,8 @@ summaryClusters <- function(df) {
 	has_hbf <- "mean_hbf"  %in% names(df)
 	has_lat <- "latitude"  %in% names(df)
 
-	## --- helpers (base equivalents of group_by()/summarise()) ---------------
 	## Group keys are built once; rowsum() does the per-(cluster, date) sums in
-	## one pass, which is what makes this usable on the full 2e6-row dataset.
+	## one pass, which keeps this fast on millions of rows.
 	## reorder = FALSE keeps groups in order of first appearance, so the key
 	## columns can be recovered with !duplicated() instead of a string split.
 	key   <- paste(as.character(df$cluster), format(df$ymd), sep = "\r")
@@ -532,7 +518,7 @@ summaryClusters <- function(df) {
 	d_tot   <- sums[, "yft_n"] + sums[, "bet_n"] + sums[, "alb_n"]
 	d_CPUE  <- sums[, "yft_n"] / sums[, "E"]
 
-	## dplyr's summarise() returns groups in sorted order; match that.
+	## Clusters in sorted order.
 	lev <- sort(unique(d_cluster))
 	g   <- factor(d_cluster, levels = lev)
 	num <- function(x, f) vapply(split(x, g), f, numeric(1), USE.NAMES = FALSE)
@@ -570,9 +556,8 @@ summaryClusters <- function(df) {
 		result$HBF_min <- unname(r$lo); result$HBF_max <- unname(r$hi)
 	}
 	if (has_lat) {
-		## Preserved verbatim from the dplyr version: the per-date statistic is
-		## mean(quantile(latitude, c(0.01, 0.99))), i.e. a midrange of the 1st
-		## and 99th percentiles, not a mean latitude.
+		## The per-date statistic is mean(quantile(latitude, c(0.01, 0.99))),
+		## i.e. the midrange of the 1st and 99th percentiles, not a mean latitude.
 		mid <- vapply(split(df$latitude, factor(key, levels = unique(key))),
 					  function(v) mean(stats::quantile(v, c(0.01, 0.99))),
 					  numeric(1))
@@ -634,7 +619,7 @@ orderClusters <- function(df, by = c("yft_w", "yft_frac")) {
 					yft_frac = vapply(split(df$yft_n,   g), sum, numeric(1)) /
 						vapply(split(df$total_n, g), sum, numeric(1)),
 					yft_w    = vapply(split(df$yft_w,   g), sum, numeric(1), na.rm = TRUE))
-	## order() is stable, matching dplyr::arrange(desc(.))
+	## order() is stable: ties keep their original order
 	old_ids <- lev[order(score, decreasing = TRUE)]
 	new_ids <- seq_along(old_ids)
 	df$cluster <- factor(new_ids[match(df$cluster, old_ids)], levels = new_ids)

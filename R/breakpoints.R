@@ -1,394 +1,69 @@
-## R/breakpoints.R -- breakpoint detection and ecological validation,
-## ported from myLibrary.r's breakpointAnalysis()/addBreakpointsToPlot()/
-## summaryBP() and associated helpers.
+## R/breakpoints.R -- breakpoint analysis of the cluster time series.
 ##
-## Design: analysis and plotting are fully separate. analyseBreakpoints()
-## returns a plain data frame (no copies of the input series) meant to be
-## saved; plotBreakpoints() reconstructs the figure from that data frame plus
-## the original time series. Three previously-fused concerns -- statistical
-## detection, age validation, spatial validation -- are now three functions
-## that can be tested and called independently.
+## Design, calibration and detection limits are documented in
+## breakpoint_report.qmd.
 ##
-## Needs `changepoint` added to DESCRIPTION Imports (cpt.mean/cpts).
-##
-## Known open items, not resolved here:
-##  - Linf/K/t0 defaults below need a literature citation (Baldrech to add).
-##  - The age formula's t0 term is left un-scaled to days, exactly as in
-##    myLibrary.r -- see check_age_formula_units.R for what that does to
-##    results. Not changed pending a decision.
-##  - calculateDistance()'s formal args are (lat1, lon1, lat2, lon2) but
-##    every caller below passes (lon, lat, lon, lat), unchanged from the
-##    original. Because both points get the same swapped treatment, this is
-##    self-consistent (baseline and observed values are biased the same way),
-##    but the distances are not true Haversine km and "Centroid_Distance" in
-##    any output table is mislabelled. Not fixed here -- flagging it.
-##  - Segment classification compares each segment's slope to
-##    sd(smoothed segment) * slope_magnitude_threshold. LOESS smoothing
-##    crushes residual variance on flat segments far from any real change,
-##    so that threshold can shrink enough for a negligible residual slope to
-##    read as "increasing"/"decreasing" instead of "stable" -- which blocks
-##    the stable-to-stable candidate rule for that segment entirely. Seen on
-##    a clean synthetic level shift (see test-breakpoints.R history). Not
-##    fixed here -- carried over unchanged from breakpointAnalysis().
+## Per (cluster, variable) monthly series (aggregateClusterTimeSeries()):
+##   1. candidates: EnvCpt (default; mean/trend x iid/AR1 x with/without
+##      changepoints, best by AIC) or PELT on the noise-scaled series.
+##   2. characterisation of each candidate on +/- `window` months:
+##        ramp  y = a + b t + delta * ramp(t; start, duration)
+##        pulse y = a + b t + delta * exp(-(t - start) / tau), t >= start
+##      against no change y = a + b t, over grids of start / duration / tau.
+##      Likelihood ratio with an AR(1)-corrected effective sample size;
+##      profile interval [d_lo, d_hi] on the transition duration.
+##   3. classification against a timescale T_c: cohort timescale (von
+##      Bertalanffy age at the local mean length) or a fixed number of months
+##      (HBF: 12 by default in analyseClusterBreakpoints()):
+##        pulse fits better and tau <= transient_tau_frac * T_c -> "transient"
+##        d_lo >  T_c   -> "gradual"
+##        d_hi <= T_c   -> "abrupt"; d_lo <= T_c < d_hi -> "ambiguous"
+##      then, for abrupt AND ambiguous changes (if spatial data given):
+##        flag mix changed more than usual     -> "composition"
+##        else same flags moved more than usual -> "relocation"
+##        else abrupt -> "unexplained" (ambiguous stays "ambiguous")
+##   4. analyseClusterBreakpoints() (needs all clusters):
+##      - "composition" changes whose flag gains / losses are mirrored by
+##        another cluster at the same time -> "switch" (rows moving between
+##        clusters: the clustering-relevant signal). Not mirrored = the
+##        cluster's membership changed for another reason (fleet entering /
+##        leaving the fishery): stays "composition".
+##      - changes found at the same time in most clusters -> common = TRUE
+##        (data / reporting events, or a fleet appearing everywhere). Switch
+##        changes are never common and do not count towards it.
 
+utils::globalVariables(c("x", "start_date", "end_plot", "lab"))
 
-# ---- age validation ---------------------------------------------------
+.BP_ORIGIN <- as.Date("1900-01-15")
 
-#' Convert mean fork length to implied age via a von Bertalanffy growth curve
-#'
-#' Inverts the von Bertalanffy growth equation to estimate age (in days) from
-#' mean fork length. Used to check whether the time between two detected
-#' breakpoints is consistent with a single cohort ageing through the
-#' population, rather than an artefact of the changepoint detector.
-#'
-#' @param length_cm Numeric vector of fork lengths, in cm.
-#' @param Linf Numeric; asymptotic length (cm). Default 150.3 -- TODO:
-#'   citation needed.
-#' @param K Numeric; growth coefficient (per year). Default 0.442.
-#' @param t0 Numeric; theoretical age (years) at length zero. Default -0.244.
-#'
-#' @return Numeric vector of implied ages in days, same length as
-#'   `length_cm`. `NA` where `length_cm >= Linf` (undefined under the model).
-#'
-#' @family breakpoint analysis utilities
-#' @export
-ageFromLength <- function(length_cm, Linf = 150.3, K = 0.442, t0 = -0.244) {
-	over <- length_cm >= Linf
-	if (any(over, na.rm = TRUE))
-		warning("ageFromLength(): ", sum(over, na.rm = TRUE),
-				" length(s) >= Linf (", Linf, "); returning NA for those.")
-	ratio <- ifelse(over, NA_real_, 1 - length_cm / Linf)  # avoid log() of <= 0 -> spurious "NaNs produced"
-	t0 - log(ratio) / K * 365
+.bpMonthIdx <- function(d, origin = .BP_ORIGIN) {
+	d <- as.POSIXlt(d); o <- as.POSIXlt(origin)
+	(d$year - o$year) * 12 + (d$mon - o$mon) + 1
 }
 
-#' Test whether breakpoints are consistent with cohort ageing
-#'
-#' For each candidate breakpoint, compares the time until the next breakpoint
-#' (or the end of the series) against the age implied by mean length around
-#' that breakpoint ([ageFromLength()]). A breakpoint passes if the fleet
-#' could plausibly still be fishing the same cohort at that point, i.e. the
-#' phase length does not exceed the implied age.
-#'
-#' @param bp_dates Date vector of candidate breakpoint dates, sorted ascending.
-#' @param dates Date vector for the full analysis series (aligned with
-#'   `mean_len`).
-#' @param mean_len Numeric vector of mean length values, aligned to `dates`.
-#' @param series_end Date; end of the analysis series, used as the phase end
-#'   for the last breakpoint.
-#' @param window_months Numeric; months either side of a breakpoint used to
-#'   compute its implied age. Default 6.
-#' @param skip Logical; if `TRUE`, bypasses the test -- every breakpoint
-#'   passes with `age_limit_days = Inf` (for variables with no length-age
-#'   relationship, e.g. `mean_hbf`). Default `FALSE`.
-#' @param Linf,K,t0 Growth parameters passed to [ageFromLength()].
-#'
-#' @return A data frame, one row per element of `bp_dates`, with columns
-#'   `bp_date`, `age_limit_days`, `phase_days`, `passed`.
-#'
-#' @family breakpoint analysis utilities
-#' @export
-validateBreakpointAge <- function(bp_dates, dates, mean_len, series_end,
-								  window_months = 6, skip = FALSE,
-								  Linf = 150.3, K = 0.442, t0 = -0.244) {
-	n <- length(bp_dates)
-	if (n == 0)
-		return(data.frame(bp_date = as.Date(character()), age_limit_days = numeric(),
-						  phase_days = numeric(), passed = logical()))
-
-	phase_days <- c(as.numeric(diff(bp_dates)), as.numeric(series_end - bp_dates[n]))
-
-	if (skip)
-		return(data.frame(bp_date = bp_dates, age_limit_days = Inf,
-						  phase_days = phase_days, passed = TRUE))
-
-	## seq.Date(by = "n months") mirrors adding whole calendar months, EXCEPT
-	## at month-end overflow (e.g. Jan 31 + 1 month rolls to Mar 3 rather than
-	## clamping to Feb 28/29, unlike lubridate::months()). Not handled here.
-	age_limit_days <- vapply(bp_dates, function(bp) {
-		window_start <- seq(bp, by = paste(-window_months, "months"), length.out = 2)[2]
-		window_end   <- seq(bp, by = paste( window_months, "months"), length.out = 2)[2]
-		in_window <- dates >= window_start & dates <= window_end
-		stats::median(ageFromLength(mean_len[in_window], Linf, K, t0), na.rm = TRUE)
-	}, numeric(1))
-
-	data.frame(bp_date = bp_dates, age_limit_days = age_limit_days,
-			  phase_days = phase_days, passed = phase_days <= age_limit_days)
+.bpIdxToDate <- function(i, origin = .BP_ORIGIN) {
+	out <- rep(as.Date(NA), length(i)); ok <- !is.na(i)
+	if (any(ok)) out[ok] <- seq(origin, by = "month", length.out = max(i[ok]))[i[ok]]
+	out
 }
 
+.bpRamp <- function(t, s, d) pmin(pmax((t - s + 1) / d, 0), 1)
 
-# ---- spatial validation -------------------------------------------------
-
-#' Great-circle (Haversine) distance between two points
-#'
-#' @param lat1,lon1,lat2,lon2 Numeric; coordinates in decimal degrees.
-#' @return Numeric distance in km (see file header re: caller argument order).
-#' @family breakpoint analysis utilities
-#' @export
-calculateDistance <- function(lat1, lon1, lat2, lon2) {
-	lat1r <- lat1 * pi / 180; lon1r <- lon1 * pi / 180
-	lat2r <- lat2 * pi / 180; lon2r <- lon2 * pi / 180
-	dlat <- lat2r - lat1r; dlon <- lon2r - lon1r
-	a <- sin(dlat / 2)^2 + cos(lat1r) * cos(lat2r) * sin(dlon / 2)^2
+.bpHaversine <- function(lon1, lat1, lon2, lat2) {
+	rad <- pi / 180
+	dlat <- (lat2 - lat1) * rad; dlon <- (lon2 - lon1) * rad
+	a <- sin(dlat / 2)^2 + cos(lat1 * rad) * cos(lat2 * rad) * sin(dlon / 2)^2
 	6371 * 2 * atan2(sqrt(a), sqrt(1 - a))
 }
 
-#' Spread of fishing positions around a centroid
-#'
-#' @param longitude,latitude Numeric vectors of positions.
-#' @param centroid Numeric length-2 vector, `c(longitude, latitude)`.
-#' @return Numeric; SD of distances (km) from each point to `centroid`. `0`
-#'   if fewer than 2 points.
-#' @family breakpoint analysis utilities
-#' @export
-calculateFleetSpread <- function(longitude, latitude, centroid) {
-	if (length(longitude) <= 1) return(0)
-	d <- mapply(function(lon, lat) calculateDistance(lon, lat, centroid[1], centroid[2]),
-			   longitude, latitude)
-	stats::sd(d, na.rm = TRUE)
-}
-
-#' Spatial (Jaccard) overlap between two sets of points
-#'
-#' Grids both point sets onto a common lon/lat grid and returns the Jaccard
-#' index (grid-cell overlap) between them.
-#'
-#' @param points1,points2 Data frames with `longitude`/`latitude` columns.
-#' @param cell_size Numeric; grid cell size in degrees. Default 1.
-#' @return Numeric in \[0, 1\]; 0 if the two sets share no grid cell.
-#' @family breakpoint analysis utilities
-#' @export
-calculateSpatialOverlap <- function(points1, points2, cell_size = 1) {
-	min_lon <- min(c(points1$longitude, points2$longitude), na.rm = TRUE)
-	max_lon <- max(c(points1$longitude, points2$longitude), na.rm = TRUE)
-	min_lat <- min(c(points1$latitude, points2$latitude), na.rm = TRUE)
-	max_lat <- max(c(points1$latitude, points2$latitude), na.rm = TRUE)
-
-	lon_range <- max_lon - min_lon; lat_range <- max_lat - min_lat
-	min_lon <- min_lon - 0.1 * lon_range; max_lon <- max_lon + 0.1 * lon_range
-	min_lat <- min_lat - 0.1 * lat_range; max_lat <- max_lat + 0.1 * lat_range
-
-	lon_breaks <- seq(min_lon, max_lon, by = cell_size)
-	lat_breaks <- seq(min_lat, max_lat, by = cell_size)
-	## seq() over an extent smaller than cell_size returns a single break, which
-	## leaves no valid bin at all below (findInterval()'s "valid" test needs
-	## index < length(breaks), impossible with only one break) -- every point
-	## then gets discarded and any two point sets, even identical ones, come
-	## back with overlap 0. Guarantee at least one real bin.
-	if (length(lon_breaks) < 2) lon_breaks <- c(min_lon, max_lon + cell_size)
-	if (length(lat_breaks) < 2) lat_breaks <- c(min_lat, max_lat + cell_size)
-
-	assign_to_grid <- function(points) {
-		n_cells <- length(lon_breaks) * length(lat_breaks)
-		if (nrow(points) == 0) return(integer(n_cells))
-		lon_idx <- findInterval(points$longitude, lon_breaks)
-		lat_idx <- findInterval(points$latitude, lat_breaks)
-		valid <- lon_idx > 0 & lon_idx < length(lon_breaks) &
-				 lat_idx > 0 & lat_idx < length(lat_breaks)
-		if (!any(valid)) return(integer(n_cells))
-		cell_idx <- (lat_idx[valid] - 1) * (length(lon_breaks) - 1) + lon_idx[valid]
-		tab <- table(cell_idx)
-		result <- integer(n_cells)
-		result[as.integer(names(tab))] <- as.integer(tab)
-		result
-	}
-
-	g1 <- assign_to_grid(points1) > 0
-	g2 <- assign_to_grid(points2) > 0
-	union <- sum(g1 | g2)
-	if (union == 0) return(0)
-	sum(g1 & g2) / union
-}
-
-#' Empirical baseline of period-to-period fleet movement for one cluster
-#'
-#' Computes centroid distance, spatial overlap, and spread change between
-#' every pair of consecutive observation dates within a cluster, and
-#' summarises each as a distribution (mean/SD/quantiles) used as the
-#' reference against which a candidate breakpoint's movement is judged in
-#' [validateBreakpointSpatial()]. Recomputed on every call (no memoisation).
-#'
-#' @param df Data frame with `cluster`, `date`, `longitude`, `latitude`
-#'   columns.
-#' @param cluster_id Cluster identifier to subset to.
-#'
-#' @return A list with `raw_metrics` (the per-period-pair values) and
-#'   `thresholds` (mean/SD/quantiles per metric).
-#'
-#' @family breakpoint analysis utilities
-#' @export
-calculateClusterMovementBaseline <- function(df, cluster_id) {
-	cluster_data <- df[df$cluster == cluster_id, , drop = FALSE]
-	dates <- sort(unique(cluster_data$date))
-
-	centroid_distances <- spatial_overlaps <- spread_changes <- numeric(0)
-
-	for (i in seq_len(max(length(dates) - 1, 0))) {
-		data_start <- cluster_data[cluster_data$date == dates[i], , drop = FALSE]
-		data_end   <- cluster_data[cluster_data$date == dates[i + 1], , drop = FALSE]
-		if (nrow(data_start) == 0 || nrow(data_end) == 0) next
-
-		start_centroid <- c(mean(data_start$longitude, na.rm = TRUE), mean(data_start$latitude, na.rm = TRUE))
-		end_centroid   <- c(mean(data_end$longitude, na.rm = TRUE),   mean(data_end$latitude, na.rm = TRUE))
-
-		centroid_distance <- calculateDistance(start_centroid[1], start_centroid[2],
-											   end_centroid[1], end_centroid[2])
-		start_spread <- calculateFleetSpread(data_start$longitude, data_start$latitude, start_centroid)
-		end_spread   <- calculateFleetSpread(data_end$longitude, data_end$latitude, end_centroid)
-		spread_change <- if (start_spread > 0) abs(end_spread - start_spread) / start_spread else 0
-		overlap <- calculateSpatialOverlap(data_start[, c("longitude", "latitude")],
-										   data_end[,   c("longitude", "latitude")])
-
-		centroid_distances <- c(centroid_distances, centroid_distance)
-		spatial_overlaps   <- c(spatial_overlaps, overlap)
-		spread_changes      <- c(spread_changes, spread_change)
-	}
-
-	summarise_metric <- function(x) list(
-		mean = mean(x, na.rm = TRUE), sd = stats::sd(x, na.rm = TRUE),
-		q10 = stats::quantile(x, 0.10, na.rm = TRUE), q25 = stats::quantile(x, 0.25, na.rm = TRUE),
-		q75 = stats::quantile(x, 0.75, na.rm = TRUE), q90 = stats::quantile(x, 0.90, na.rm = TRUE)
-	)
-
-	list(
-		raw_metrics = list(centroid_distances = centroid_distances,
-						  spatial_overlaps = spatial_overlaps, spread_changes = spread_changes),
-		thresholds = list(centroid_distance = summarise_metric(centroid_distances),
-						 spatial_overlap = summarise_metric(spatial_overlaps),
-						 spread_change = summarise_metric(spread_changes))
-	)
-}
-
-#' Decide whether a breakpoint's spatial movement is significant
-#'
-#' Compares observed centroid distance / spatial overlap / spread change
-#' against a cluster's empirical baseline ([calculateClusterMovementBaseline()])
-#' at a chosen strictness level.
-#'
-#' @param centroid_distance,spatial_overlap,spread_change Numeric; observed
-#'   values at the candidate breakpoint.
-#' @param baseline_thresholds The `thresholds` element of
-#'   [calculateClusterMovementBaseline()]'s return value.
-#' @param strictness One of `"lenient"`, `"moderate"`, `"strict"`. Default
-#'   `"moderate"`.
-#'
-#' @return A list: `is_significant`, `criteria_met`, `z_scores`,
-#'   `thresholds_used`, `raw_values`.
-#'
-#' @family breakpoint analysis utilities
-#' @export
-evaluateBreakpointMovement <- function(centroid_distance, spatial_overlap, spread_change,
-									   baseline_thresholds, strictness = "moderate") {
-	thresholds <- baseline_thresholds
-	if (strictness == "lenient") {
-		distance_threshold <- thresholds$centroid_distance$q75
-		overlap_threshold  <- thresholds$spatial_overlap$q25
-		spread_threshold   <- thresholds$spread_change$q75
-		min_criteria <- 1
-	} else if (strictness == "moderate") {
-		distance_threshold <- thresholds$centroid_distance$q90
-		overlap_threshold  <- thresholds$spatial_overlap$q10
-		spread_threshold   <- thresholds$spread_change$q90
-		min_criteria <- 1
-	} else if (strictness == "strict") {
-		distance_threshold <- thresholds$centroid_distance$mean + 2 * thresholds$centroid_distance$sd
-		overlap_threshold  <- max(0, thresholds$spatial_overlap$mean - 2 * thresholds$spatial_overlap$sd)
-		spread_threshold   <- thresholds$spread_change$mean + 2 * thresholds$spread_change$sd
-		min_criteria <- 2
-	} else {
-		## Original had no matching else branch: an unrecognised value left
-		## distance_threshold etc. undefined, failing later with a cryptic
-		## "object not found". Made explicit -- a deliberate change, not a
-		## silent one.
-		stop("strictness must be one of 'lenient', 'moderate', 'strict'")
-	}
-
-	criteria_met <- c(
-		distance_significant = centroid_distance > distance_threshold,
-		overlap_significant  = spatial_overlap < overlap_threshold,
-		spread_significant   = spread_change > spread_threshold
-	)
-	z_scores <- c(
-		distance_z = (centroid_distance - thresholds$centroid_distance$mean) / thresholds$centroid_distance$sd,
-		overlap_z  = (thresholds$spatial_overlap$mean - spatial_overlap) / thresholds$spatial_overlap$sd,
-		spread_z   = (spread_change - thresholds$spread_change$mean) / thresholds$spread_change$sd
-	)
-
-	list(is_significant = sum(criteria_met) >= min_criteria, criteria_met = criteria_met, z_scores = z_scores,
-		thresholds_used = list(distance = distance_threshold, overlap = overlap_threshold, spread = spread_threshold),
-		raw_values = list(centroid_distance = centroid_distance, spatial_overlap = spatial_overlap, spread_change = spread_change))
-}
-
-#' Test whether breakpoints coincide with the fleet relocating
-#'
-#' For each candidate breakpoint, compares the fleet's position just before
-#' and just after against the cluster's empirical movement baseline. A
-#' breakpoint passes (is spatially valid) when the fleet did *not* move
-#' significantly -- a compositional shift explained by relocation isn't an
-#' independent regime change.
-#'
-#' @param bp_dates Date vector of candidate breakpoint dates.
-#' @param df Data frame with `cluster`, `date`, `longitude`, `latitude`
-#'   columns (the raw, un-summarised fisheries data).
-#' @param cluster_id Cluster identifier.
-#' @param strictness Passed to [evaluateBreakpointMovement()]. Default
-#'   `"moderate"`.
-#' @param baseline Optional, pre-computed
-#'   [calculateClusterMovementBaseline()] result; if `NULL` (default) it is
-#'   computed here, once per call (no cross-call caching).
-#'
-#' @return A data frame, one row per element of `bp_dates` that had both a
-#'   before- and after-period in `df` (breakpoints with no following
-#'   observation are dropped -- matches the original, which never added such
-#'   a breakpoint to `valid_bp_dates`), with columns `bp_date`,
-#'   `centroid_distance`, `spatial_overlap`, `spread_change_ratio`, `passed`.
-#'
-#' @family breakpoint analysis utilities
-#' @export
-validateBreakpointSpatial <- function(bp_dates, df, cluster_id, strictness = "moderate", baseline = NULL) {
-	if (is.null(baseline)) baseline <- calculateClusterMovementBaseline(df, cluster_id)
-
-	rows <- lapply(bp_dates, function(bp_date) {
-		data_start <- df[df$cluster == cluster_id & df$date == bp_date, , drop = FALSE]
-		future_dates <- unique(df$date[df$cluster == cluster_id & df$date > bp_date])
-		if (nrow(data_start) == 0 || length(future_dates) == 0) return(NULL)
-
-		next_date <- min(future_dates)
-		data_end <- df[df$cluster == cluster_id & df$date == next_date, , drop = FALSE]
-		if (nrow(data_end) == 0) return(NULL)
-
-		start_centroid <- c(mean(data_start$longitude, na.rm = TRUE), mean(data_start$latitude, na.rm = TRUE))
-		end_centroid   <- c(mean(data_end$longitude, na.rm = TRUE),   mean(data_end$latitude, na.rm = TRUE))
-
-		centroid_distance <- calculateDistance(start_centroid[1], start_centroid[2], end_centroid[1], end_centroid[2])
-		start_spread <- calculateFleetSpread(data_start$longitude, data_start$latitude, start_centroid)
-		end_spread   <- calculateFleetSpread(data_end$longitude, data_end$latitude, end_centroid)
-		spread_change_ratio <- if (start_spread > 0) abs(end_spread - start_spread) / start_spread else 0
-		overlap <- calculateSpatialOverlap(data_start[, c("longitude", "latitude")], data_end[, c("longitude", "latitude")])
-
-		eval <- evaluateBreakpointMovement(centroid_distance, overlap, spread_change_ratio, baseline$thresholds, strictness)
-
-		data.frame(bp_date = bp_date, centroid_distance = centroid_distance, spatial_overlap = overlap,
-				  spread_change_ratio = spread_change_ratio, passed = !eval$is_significant)
-	})
-
-	rows <- rows[!vapply(rows, is.null, logical(1))]
-	if (length(rows) == 0)
-		return(data.frame(bp_date = as.Date(character()), centroid_distance = numeric(),
-						  spatial_overlap = numeric(), spread_change_ratio = numeric(), passed = logical()))
-	do.call(rbind, rows)
-}
-
-
-# ---- input prep ------------------------------------------------------------
+# ---- input series ------------------------------------------------------------
 
 #' Aggregate fisheries data into per-(cluster, date) time series
 #'
 #' Minimal, purpose-built aggregation for breakpoint analysis: catch per unit
 #' effort (CPUE), mean length, and mean hooks-between-floats, one row per
-#' (cluster, date). Not a general-purpose cluster summary -- see
-#' [summaryClusters()] for per-cluster (not per-date) statistics, and note
-#' this does none of `summarizeClusterData()`'s (myLibrary.r) extra work:
-#' no lat/lon centroid, no fleet-movement distance.
+#' (cluster, date). Not a general-purpose cluster summary: see
+#' [summaryClusters()] for per-cluster (not per-date) statistics.
 #'
 #' Imputed values are left out of the `mean_len` and `mean_hbf` series by
 #' default, whatever the clustering scenario: they are set to `NA` before
@@ -415,7 +90,7 @@ validateBreakpointSpatial <- function(bp_dates, df, cluster_id, strictness = "mo
 #'   `n_hbf` (number of rows behind each `mean_len` / `mean_hbf` value),
 #'   sorted by cluster then date.
 #'
-#' @family breakpoint analysis utilities
+#' @family breakpoint analysis
 #' @export
 aggregateClusterTimeSeries <- function(df, use_imputed = FALSE,
 									   len_imputed = "imputed", hbf_valid = "valid") {
@@ -448,203 +123,491 @@ aggregateClusterTimeSeries <- function(df, use_imputed = FALSE,
 	out[order(out$cluster, out$date), ]
 }
 
-# ---- statistical detection ------------------------------------------------
 
-#' Detect and classify candidate regime-change breakpoints in a time series
+# ---- detection and classification ---------------------------------------------
+
+#' Age (months) at length from the von Bertalanffy growth curve
 #'
-#' Smooths the series with LOESS, runs `changepoint::cpt.mean()` (PELT) to
-#' find raw changepoints, classifies the segment between each pair of
-#' consecutive changepoints as increasing/decreasing/stable (via segment
-#' slope significance and magnitude), and keeps only transitions between
-#' stable segments whose means differ by more than `change_threshold`
-#' (proportionally). Breakpoints within one year of the series end are
-#' dropped. No domain (age/spatial) validation happens here.
+#' Inverts the von Bertalanffy growth curve
+#' `L(a) = Linf * (1 - exp(-K * (a - t0)))`, with `a` and `t0` in years, and
+#' returns the age in months. Used as the cohort timescale of the breakpoint
+#' analysis.
 #'
-#' @param dates Date vector.
-#' @param x Numeric vector, same length as `dates`; the variable to detect
-#'   changepoints in.
-#' @param min_segment_length Integer; minimum segment length for `cpt.mean()`
-#'   and for a series to be analysed at all (needs > `2 * min_segment_length`
-#'   points). Default 12.
-#' @param penalty_factor Passed to `cpt.mean(penalty = )`. Default `"BIC"`.
-#' @param smooth_span LOESS span. Default 0.2.
-#' @param change_threshold Numeric; minimum proportional change between two
-#'   stable segments to count as a candidate breakpoint. Default 0.03.
-#' @param slope_p_threshold,slope_magnitude_threshold Thresholds for
-#'   classifying a segment as increasing/decreasing vs stable. Defaults 0.1,
-#'   0.05.
+#' The default growth parameters are for yellowfin tuna in the western and
+#' central Pacific Ocean (Farley et al. 2020).
 #'
-#' @return `NULL` if there isn't enough data; otherwise a list with
-#'   `bp_dates` (Date vector of candidate breakpoints, sorted) and
-#'   `segment_info` (data frame describing every segment between raw
-#'   changepoints -- kept for [plotBreakpoints()]'s segment-classification
-#'   overlay, see note there).
+#' @references Farley, J., Krusic-Golub, K., Eveson, P., Clear, N.,
+#'   Roupsard, F., Sanchez, C., Nicol, S. and Hampton, J. (2020). Age and
+#'   growth of yellowfin and bigeye tuna in the western and central Pacific
+#'   Ocean from otoliths. WCPFC-SC16-2020/SA-WP-02, Western and Central
+#'   Pacific Fisheries Commission.
 #'
-#' @family breakpoint analysis utilities
-#' @importFrom changepoint cpt.mean cpts
+#' @param len Numeric, fork length (cm).
+#' @param Linf,K,t0 Growth parameters (cm, per year, years). Defaults:
+#'   yellowfin, Farley et al. (2020).
+#' @return Numeric, age in months; `NA` where `len >= Linf`.
+#' @family breakpoint analysis
 #' @export
-detectChangepoints <- function(dates, x, min_segment_length = 12, penalty_factor = "BIC",
-							   smooth_span = 0.2, change_threshold = 0.03,
-							   slope_p_threshold = 0.1, slope_magnitude_threshold = 0.05) {
-	ord <- order(dates)
-	dates <- dates[ord]; x <- x[ord]
-	if (length(x) <= min_segment_length * 2) return(NULL)
-
-	time_num <- as.numeric(dates - min(dates))
-	loess_fit <- stats::loess(x ~ time_num, span = smooth_span, degree = 1, na.action = stats::na.exclude)
-	smoothed <- stats::predict(loess_fit, newdata = data.frame(time_num = time_num))
-
-	keep <- !is.na(smoothed)
-	if (sum(keep) <= min_segment_length * 2) return(NULL)
-	dates_k <- dates[keep]; ts_data <- smoothed[keep]
-
-	cpt_result <- changepoint::cpt.mean(ts_data, method = "PELT", penalty = penalty_factor,
-										minseglen = min_segment_length, test.stat = "Normal")
-	changepoints <- changepoint::cpts(cpt_result)
-	if (length(changepoints) == 0) return(list(bp_dates = as.Date(character()), segment_info = NULL))
-
-	bp_indices <- changepoints[changepoints < length(ts_data)]
-	segment_starts <- c(1, bp_indices + 1)
-	segment_ends   <- c(bp_indices, length(ts_data))
-
-	segment_info <- do.call(rbind, lapply(seq_along(segment_starts), function(i) {
-		seg <- ts_data[segment_starts[i]:segment_ends[i]]
-		seg_type <- "stable"; seg_slope <- 0; seg_p <- NA
-		if (length(seg) > 3) {
-			seg_time <- segment_starts[i]:segment_ends[i]
-			fit <- stats::lm(seg ~ seg_time)
-			seg_slope <- stats::coef(fit)[2]
-			seg_p <- summary(fit)$coefficients[2, 4]
-			if (seg_p < slope_p_threshold && abs(seg_slope) > stats::sd(seg) * slope_magnitude_threshold)
-				seg_type <- if (seg_slope > 0) "increasing" else "decreasing"
-		}
-		data.frame(segment = i, start_idx = segment_starts[i], end_idx = segment_ends[i],
-				  mean_value = mean(seg, na.rm = TRUE), start_value = seg[1], end_value = seg[length(seg)],
-				  type = seg_type, slope = seg_slope, p_value = seg_p)
-	}))
-
-	candidate_idx <- c()
-	for (i in seq_len(nrow(segment_info) - 1)) {
-		cur <- segment_info[i, ]; nxt <- segment_info[i + 1, ]
-		if (cur$type == "stable" && nxt$type == "stable") {
-			pct <- abs(nxt$mean_value - cur$mean_value) / abs(cur$mean_value)
-			if (pct > change_threshold) candidate_idx <- c(candidate_idx, bp_indices[i])
-		} else if (cur$type == "stable" && i + 1 < nrow(segment_info)) {
-			future <- segment_info[(i + 2):nrow(segment_info), , drop = FALSE]
-			future_stable <- future[future$type == "stable", , drop = FALSE][1, ]
-			if (!is.na(future_stable$segment)) {
-				pct <- abs(future_stable$mean_value - cur$mean_value) / abs(cur$mean_value)
-				if (pct > change_threshold) candidate_idx <- c(candidate_idx, bp_indices[i])
-			}
-		}
-	}
-
-	bp_dates <- sort(dates_k[unique(candidate_idx)])
-	bp_dates <- bp_dates[bp_dates <= max(dates_k) - 365]
-	list(bp_dates = bp_dates, segment_info = segment_info)
-}
-
-
-# ---- orchestrator (this is what should be saved) ---------------------------
-
-#' Full breakpoint analysis for one (cluster, variable) time series
-#'
-#' Orchestrates [detectChangepoints()], [validateBreakpointAge()], and
-#' [validateBreakpointSpatial()] into a single tidy result. This -- not a
-#' `bp_results`-style list with embedded copies of the series -- is what
-#' should be saved: it holds only breakpoint dates and validation outcomes.
-#' Reconstructing a plot needs this data frame plus the original time
-#' series, via [plotBreakpoints()].
-#'
-#' @param dates Date vector for the analysis series.
-#' @param x Numeric vector, the variable to detect breakpoints in.
-#' @param mean_len Numeric vector of mean length, aligned to `dates`; used
-#'   for age validation. Ignored if `skip_age = TRUE`.
-#' @param df Data frame with `cluster`, `date`, `longitude`, `latitude`
-#'   (raw, un-summarised fisheries data); used for spatial validation.
-#' @param cluster_id Cluster identifier, for spatial validation.
-#' @param skip_age Logical; skip age validation for this variable (e.g.
-#'   `mean_hbf`). Default `FALSE`.
-#' @param window_months,Linf,K,t0 Passed to [validateBreakpointAge()].
-#' @param movement_strictness Passed to [validateBreakpointSpatial()].
-#' @param ... Passed to [detectChangepoints()].
-#'
-#' @return `NULL` if [detectChangepoints()] finds too little data; a 0-row
-#'   data frame if it runs but finds no candidate breakpoints; otherwise one
-#'   row per candidate breakpoint with columns `bp_date`, `age_limit_days`,
-#'   `phase_days`, `passed_age`, `centroid_distance`, `spatial_overlap`,
-#'   `spread_change_ratio`, `passed_spatial`, `valid`. A breakpoint with no
-#'   spatial test result (dropped by [validateBreakpointSpatial()]) gets
-#'   `valid = FALSE`, matching the original's behaviour of only counting a
-#'   breakpoint valid when the spatial test explicitly passed.
-#'
-#' @family breakpoint analysis utilities
-#' @export
-analyseBreakpoints <- function(dates, x, mean_len, df, cluster_id, skip_age = FALSE,
-							   window_months = 6, Linf = 150.3, K = 0.442, t0 = -0.244,
-							   movement_strictness = "moderate", ...) {
-	detected <- detectChangepoints(dates, x, ...)
-	if (is.null(detected)) return(NULL)
-	if (length(detected$bp_dates) == 0)
-		return(data.frame(bp_date = as.Date(character()), age_limit_days = numeric(),
-						  phase_days = numeric(), passed_age = logical(),
-						  centroid_distance = numeric(), spatial_overlap = numeric(),
-						  spread_change_ratio = numeric(), passed_spatial = logical(),
-						  valid = logical()))
-
-	age <- validateBreakpointAge(detected$bp_dates, dates, mean_len, max(dates),
-								 window_months = window_months, skip = skip_age, Linf = Linf, K = K, t0 = t0)
-	spatial <- validateBreakpointSpatial(detected$bp_dates, df, cluster_id, strictness = movement_strictness)
-
-	out <- merge(age, spatial, by = "bp_date", all = TRUE, suffixes = c("_age", "_spatial"))
-	out$valid <- out$passed_age & !is.na(out$passed_spatial) & out$passed_spatial
+vbAgeMonths <- function(len, Linf = 150.3, K = 0.442, t0 = -0.244) {
+	out <- rep(NA_real_, length(len)); ok <- !is.na(len) & len < Linf
+	out[ok] <- (t0 - log(1 - len[ok] / Linf) / K) * 12
 	out
 }
 
+.bpCandidatesPELT <- function(t, y, smooth_span = 0.05, minseglen = 12, penalty = "BIC") {
+	sigma <- stats::mad(diff(y)) / sqrt(2)
+	z <- if (is.finite(sigma) && sigma > 0) y / sigma else y
+	if (!is.null(smooth_span) && !is.na(smooth_span))
+		z <- as.numeric(stats::predict(stats::loess(z ~ t, span = smooth_span, degree = 1)))
+	if (length(z) <= 2 * minseglen) return(integer(0))
+	cp <- changepoint::cpts(changepoint::cpt.mean(z, method = "PELT", penalty = penalty,
+												  minseglen = minseglen, test.stat = "Normal"))
+	cp[cp < length(z)]
+}
 
-# ---- plotting (no analysis logic here) -------------------------------------
+.bpCandidatesEnvCpt <- function(y, models = c("mean", "meancpt", "meanar1", "meanar1cpt",
+											  "trend", "trendcpt", "trendar1", "trendar1cpt"),
+								minseglen = 12) {
+	fit <- EnvCpt::envcpt(y, models = models, minseglen = minseglen, verbose = FALSE)
+	aic <- stats::AIC(fit)
+	if (is.null(names(aic))) names(aic) <- models
+	best <- names(aic)[which.min(aic)]
+	cp <- if (grepl("cpt", best)) changepoint::cpts(fit[[best]]) else integer(0)
+	cp <- cp[cp < length(y)]
+	## kept for breakpoint inspection (why a change was / was not proposed)
+	cpt_models <- intersect(grep("cpt", names(aic), value = TRUE), names(fit))
+	attr(cp, "aic")  <- aic
+	attr(cp, "cpts") <- stats::setNames(lapply(cpt_models, function(m) {
+		v <- changepoint::cpts(fit[[m]]); v[v < length(y)] }), cpt_models)
+	cp
+}
 
-#' Overlay breakpoint analysis results on a time series plot
+.bpCharacterise <- function(t, y, cand_t, T_c, window = 72,
+							durations = c(1, 3, 6, 12, 18, 24, 36, 48, 72, 96),
+							pulse_taus = c(3, 6, 9, 12, 18, 24, 36, 48, 72, 120),
+							start_slack = 12, margin = 6, detail = FALSE) {
+	in_w <- t >= cand_t - window & t <= cand_t + window
+	tw <- t[in_w]; yw <- y[in_w]; n <- length(yw)
+	if (n < 24) return(NULL)
+	X0   <- cbind(1, tw - cand_t)
+	rss0 <- sum(stats::.lm.fit(X0, yw)$residuals^2)
+
+	prof <- stats::setNames(rep(NA_real_, length(durations)), durations)
+	best <- list(rss = Inf)
+	for (d in durations) {
+		starts <- seq(cand_t - d - start_slack, cand_t + start_slack)
+		starts <- starts[starts > min(tw) + margin & starts + d < max(tw) - margin]
+		if (!length(starts)) next
+		rss_d <- vapply(starts, function(s)
+			sum(stats::.lm.fit(cbind(X0, .bpRamp(tw, s, d)), yw)$residuals^2), numeric(1))
+		k <- which.min(rss_d)
+		prof[as.character(d)] <- rss_d[k]
+		if (rss_d[k] < best$rss) best <- list(rss = rss_d[k], s = starts[k], d = d)
+	}
+	if (!is.finite(best$rss)) return(NULL)
+
+	fit   <- stats::.lm.fit(cbind(X0, .bpRamp(tw, best$s, best$d)), yw)
+	delta <- fit$coefficients[3]
+	res   <- fit$residuals
+	phi   <- suppressWarnings(stats::cor(res[-1], res[-n]))
+	phi   <- if (is.finite(phi)) min(max(phi, 0), 0.95) else 0
+	n_eff <- n * (1 - phi) / (1 + phi)
+
+	ok    <- is.finite(prof)
+	in_ci <- n_eff * log(prof[ok] / best$rss) <= stats::qchisq(0.95, 1)
+	d_ok  <- durations[ok]
+
+	p_starts <- seq(cand_t - 24, cand_t + start_slack)
+	p_starts <- p_starts[p_starts > min(tw) + margin & p_starts < max(tw) - margin]
+	best_p <- list(rss = Inf, s = NA_real_, tau = NA_real_)
+	for (tau in pulse_taus) {
+		if (!length(p_starts)) break
+		rss_p <- vapply(p_starts, function(s)
+			sum(stats::.lm.fit(cbind(X0, ifelse(tw >= s, exp(-(tw - s) / tau), 0)), yw)$residuals^2),
+			numeric(1))
+		k <- which.min(rss_p)
+		if (rss_p[k] < best_p$rss) best_p <- list(rss = rss_p[k], s = p_starts[k], tau = tau)
+	}
+	rss_best <- min(best$rss, best_p$rss)
+	lr <- n_eff * log(rss0 / rss_best)
+
+	pre <- y[t >= best$s - 12 & t < best$s]
+	out <- data.frame(cand_t = cand_t, s_hat = best$s, d_hat = best$d,
+			   d_lo = min(d_ok[in_ci]), d_hi = max(d_ok[in_ci]),
+			   T_c = T_c, delta = unname(delta), pre_level = if (length(pre)) mean(pre) else NA_real_,
+			   lr = lr, p_nominal = stats::pchisq(lr, df = 3, lower.tail = FALSE),
+			   phi = phi, n_eff = n_eff,
+			   pulse_tau = best_p$tau,
+			   pulse_gain = if (is.finite(best_p$rss)) n_eff * log(best$rss / best_p$rss) else NA_real_)
+	if (detail) {
+		## profile over durations (LR statistic against the best ramp and the
+		## chi-square cutoff that defines [d_lo, d_hi]) and the three local fits
+		pulse_x <- if (is.finite(best_p$rss)) ifelse(tw >= best_p$s, exp(-(tw - best_p$s) / best_p$tau), 0) else NULL
+		attr(out, "detail") <- list(
+			t = tw, y = yw,
+			profile = data.frame(d = durations, rss = unname(prof),
+								 stat = n_eff * log(unname(prof) / best$rss),
+								 in_ci = is.finite(prof) & n_eff * log(unname(prof) / best$rss) <= stats::qchisq(0.95, 1)),
+			crit = stats::qchisq(0.95, 1),
+			fit_null  = stats::.lm.fit(X0, yw)$coefficients,
+			fitted_null  = yw - stats::.lm.fit(X0, yw)$residuals,
+			fitted_ramp  = yw - res,
+			fitted_pulse = if (is.null(pulse_x)) NULL else yw - stats::.lm.fit(cbind(X0, pulse_x), yw)$residuals,
+			pulse_s = best_p$s, rss0 = rss0, rss_ramp = best$rss, rss_pulse = best_p$rss)
+	}
+	out
+}
+
+.bpDedupe <- function(ch, gap = 6) {
+	ch <- ch[order(-ch$lr), , drop = FALSE]
+	keep <- logical(nrow(ch))
+	for (i in seq_len(nrow(ch))) {
+		a1 <- ch$s_hat[i] - gap; a2 <- ch$s_hat[i] + ch$d_hat[i] + gap
+		clash <- keep & (ch$s_hat - gap <= a2) & (ch$s_hat + ch$d_hat + gap >= a1)
+		keep[i] <- !any(clash)
+	}
+	ch[keep, , drop = FALSE]
+}
+
+#' Per-month, per-group position sums for one cluster
 #'
-#' Draws the raw series, its LOESS-smoothed curve, and a vertical line at
-#' each candidate breakpoint (solid = valid, dashed = rejected), from the
-#' output of [analyseBreakpoints()]. No analysis is performed here.
+#' Pre-computation for the composition / relocation test of
+#' [analyseBreakpoints()]; build once per cluster.
 #'
-#' @param dates Date vector for the series (same data passed to
-#'   [analyseBreakpoints()]).
-#' @param x Numeric vector, the plotted variable.
-#' @param bp_table Data frame from [analyseBreakpoints()] (or `NULL`/0-row,
-#'   plotted as a plain time series with no breakpoint lines).
-#' @param smooth_span LOESS span for the overlaid smoothed curve; should
-#'   match what [detectChangepoints()] was called with. Default 0.2.
-#' @param y_lab Y-axis label. Default `NULL`.
-#'
-#' @return A ggplot2 object.
-#'
-#' @family breakpoint plotting utilities
-#' @importFrom ggplot2 ggplot aes geom_line geom_vline scale_linetype_manual labs
+#' @param df Row-level data with `cluster`, `longitude`, `latitude`, the date
+#'   column and the group column.
+#' @param cluster_id Cluster to tabulate.
+#' @param group Column defining the fleet units (default `"flag"`).
+#' @param date_col Date column (default `"date"`).
+#' @return A list (`mi`, `n`, `slon`, `slat`).
+#' @family breakpoint analysis
 #' @export
-plotBreakpoints <- function(dates, x, bp_table, smooth_span = 0.2, y_lab = NULL) {
-	plot_df <- data.frame(date = dates, value = x)
-	p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = date, y = value)) +
-		ggplot2::geom_line() +
-		ggplot2::labs(x = NULL, y = y_lab) +
-		customTheme()
+spatialMonthTable <- function(df, cluster_id, group = "flag", date_col = "date") {
+	d <- df[df$cluster == cluster_id & !is.na(df$longitude) & !is.na(df$latitude), , drop = FALSE]
+	mi <- .bpMonthIdx(d[[date_col]])
+	g  <- as.character(d[[group]])
+	n    <- tapply(rep(1, nrow(d)), list(mi, g), sum)
+	slon <- tapply(d$longitude, list(mi, g), sum)
+	slat <- tapply(d$latitude,  list(mi, g), sum)
+	n[is.na(n)] <- 0; slon[is.na(slon)] <- 0; slat[is.na(slat)] <- 0
+	list(mi = as.integer(rownames(n)), n = n, slon = slon, slat = slat)
+}
 
-	if (sum(!is.na(x)) > 5) {
-		time_num <- as.numeric(dates - min(dates))
-		fit <- stats::loess(x ~ time_num, span = smooth_span, degree = 1, na.action = stats::na.exclude)
-		plot_df$smoothed <- stats::predict(fit, newdata = data.frame(time_num = time_num))
-		p <- p + ggplot2::geom_line(data = plot_df, ggplot2::aes(y = smoothed), colour = "blue")
+.bpWindowStats <- function(tab, a1, a2, b1, b2, min_rows = 5) {
+	ia <- tab$mi >= a1 & tab$mi < a2
+	ib <- tab$mi >= b1 & tab$mi < b2
+	na <- colSums(tab$n[ia, , drop = FALSE]); nb <- colSums(tab$n[ib, , drop = FALSE])
+	if (sum(na) == 0 || sum(nb) == 0) return(c(comp = NA_real_, reloc = NA_real_))
+	comp <- 0.5 * sum(abs(na / sum(na) - nb / sum(nb)))
+	both <- na >= min_rows & nb >= min_rows
+	reloc <- NA_real_
+	if (any(both)) {
+		lon_a <- colSums(tab$slon[ia, both, drop = FALSE]) / na[both]
+		lat_a <- colSums(tab$slat[ia, both, drop = FALSE]) / na[both]
+		lon_b <- colSums(tab$slon[ib, both, drop = FALSE]) / nb[both]
+		lat_b <- colSums(tab$slat[ib, both, drop = FALSE]) / nb[both]
+		w <- pmin(na[both], nb[both])
+		reloc <- sum(w * .bpHaversine(lon_a, lat_a, lon_b, lat_b)) / sum(w)
 	}
+	c(comp = comp, reloc = reloc)
+}
 
-	if (!is.null(bp_table) && nrow(bp_table) > 0) {
-		bp_table$status <- ifelse(bp_table$valid, "valid", "rejected")
+.bpSpatialTest <- function(s, d, tab, window = 12, null_step = 3, min_rows = 5, detail = FALSE) {
+	obs <- .bpWindowStats(tab, s - window, s, s + d, s + d + window, min_rows)
+	lo <- min(tab$mi) + window; hi <- max(tab$mi) - d - window
+	p_comp <- p_reloc <- NA_real_
+	null <- data.frame(mi = integer(), comp = numeric(), reloc = numeric())
+	if (lo <= hi) {
+		u <- seq(lo, hi, by = null_step)
+		nul <- vapply(u, function(ui) .bpWindowStats(tab, ui - window, ui, ui + d, ui + d + window, min_rows),
+					  numeric(2))
+		empP <- function(o, v) { v <- v[!is.na(v)]; if (is.na(o) || !length(v)) NA_real_ else (1 + sum(v >= o)) / (1 + length(v)) }
+		p_comp  <- empP(obs[["comp"]],  nul[1, ])
+		p_reloc <- empP(obs[["reloc"]], nul[2, ])
+		null <- data.frame(mi = u, comp = nul[1, ], reloc = nul[2, ])
+	}
+	out <- list(comp_change = obs[["comp"]], p_comp = p_comp, reloc_km = obs[["reloc"]], p_reloc = p_reloc)
+	if (detail) out$null <- null
+	out
+}
+
+.bpEmpty <- function() {
+	data.frame(cand_date = as.Date(character()), start_date = as.Date(character()), end_date = as.Date(character()),
+			   d_hat = numeric(), d_lo = numeric(), d_hi = numeric(), T_c = numeric(),
+			   delta = numeric(), delta_rel = numeric(), lr = numeric(), p_nominal = numeric(),
+			   phi = numeric(), pulse_tau = numeric(), pulse_gain = numeric(), class = character(),
+			   comp_change = numeric(), p_comp = numeric(), reloc_km = numeric(), p_reloc = numeric(),
+			   label = character(), stringsAsFactors = FALSE)
+}
+
+## Shared by analyseBreakpoints() and inspectBreakpoint(): pre-processing,
+## timescale and classification. Keep in one place so the inspection always
+## reproduces the pipeline.
+.bpPrepare <- function(dates, x, variable, mean_len, deseason = TRUE) {
+	ok <- !is.na(x) & is.finite(x)
+	dates <- dates[ok]; x <- x[ok]; ml <- mean_len[ok]
+	ord <- order(dates); dates <- dates[ord]; x <- x[ord]; ml <- ml[ord]
+	t <- .bpMonthIdx(dates)
+	y <- x
+	if (variable == "CPUE") {
+		pos <- x[x > 0]
+		y <- log(pmax(x, if (length(pos)) min(pos) / 2 else 1e-6))
+	}
+	clim <- NULL
+	if (deseason && length(y)) {
+		moy <- (t - 1) %% 12
+		clim <- tapply(y, moy, mean)
+		y <- as.numeric(y - clim[as.character(moy)] + mean(y))
+	}
+	list(dates = dates, x = x, t = t, y = y, ml = ml, clim = clim)
+}
+
+.bpTimescale <- function(t, ml, ct, abrupt_months = NULL, Linf = 150.3, K = 0.442, t0 = -0.244) {
+	if (!is.null(abrupt_months)) return(abrupt_months)
+	suppressWarnings(stats::median(vbAgeMonths(ml[abs(t - ct) <= 12], Linf, K, t0), na.rm = TRUE))
+}
+
+.bpClassify <- function(ch, transient_tau_frac = 0.5) {
+	transient <- !is.na(ch$pulse_gain) & ch$pulse_gain > 0 & !is.na(ch$T_c) &
+				 ch$pulse_tau <= transient_tau_frac * ch$T_c
+	ifelse(is.na(ch$T_c), "no_timescale",
+	ifelse(transient,         "transient",
+	ifelse(ch$d_hi <= ch$T_c, "abrupt",
+	ifelse(ch$d_lo >  ch$T_c, "gradual", "ambiguous"))))
+}
+
+.bpSpatialLabel <- function(class, p_comp, p_reloc, spatial_alpha = 0.05) {
+	label <- class
+	ab   <- class == "abrupt"
+	fast <- ab | class == "ambiguous"   # abrupt, or possibly abrupt
+	comp_sig  <- !is.na(p_comp)  & p_comp  < spatial_alpha
+	reloc_sig <- !is.na(p_reloc) & p_reloc < spatial_alpha
+	label[fast & comp_sig]               <- "composition"
+	label[fast & !comp_sig & reloc_sig]  <- "relocation"
+	label[ab   & !comp_sig & !reloc_sig] <- "unexplained"
+	label
+}
+
+#' Detect and classify changes in one cluster time series
+#'
+#' See the file header of R/breakpoints.R and breakpoint_report.qmd for the
+#' method, its calibration and detection limits.
+#'
+#' @param dates Date vector (monthly).
+#' @param x Numeric series (`CPUE` is analysed on the log scale).
+#' @param variable `"CPUE"`, `"mean_len"` or `"mean_hbf"`.
+#' @param mean_len Mean length aligned to `dates`; sets the cohort timescale.
+#' @param detector `"envcpt"` (default) or `"pelt"`.
+#' @param detector_args List of extra arguments for the candidate generator.
+#' @param deseason Remove the monthly climatology first. Default `TRUE`.
+#' @param window Half-width (months) of the local fit. Default 72.
+#' @param alpha Significance level of the change test. Default 0.1 (EnvCpt's
+#'   own model choice is the main false-positive filter; see report).
+#' @param abrupt_months `NULL` = cohort timescale from `mean_len`; a number =
+#'   fixed threshold (months).
+#' @param transient_tau_frac A pulse decaying with time constant <= this x
+#'   T_c is labelled "transient". Default 0.5.
+#' @param spatial_table [spatialMonthTable()] for this cluster, or `NULL` to
+#'   skip the composition / relocation test.
+#' @param spatial_window,spatial_alpha Window (months) and significance level
+#'   of that test.
+#' @param Linf,K,t0 Growth parameters for [vbAgeMonths()] (default:
+#'   yellowfin, Farley et al. 2020).
+#' @return Data frame, one row per significant change (0 rows if none).
+#'   `cand_date` is the EnvCpt / PELT candidate the change was characterised
+#'   around (used by [inspectBreakpoint()] to reproduce it).
+#' @family breakpoint analysis
+#' @export
+analyseBreakpoints <- function(dates, x, variable, mean_len,
+								 detector = c("envcpt", "pelt"), detector_args = list(),
+								 deseason = TRUE, window = 72, alpha = 0.1,
+								 abrupt_months = NULL, transient_tau_frac = 0.5,
+								 spatial_table = NULL, spatial_window = 12, spatial_alpha = 0.05,
+								 Linf = 150.3, K = 0.442, t0 = -0.244) {
+	detector <- match.arg(detector)
+	empty <- .bpEmpty()
+	pr <- .bpPrepare(dates, x, variable, mean_len, deseason)
+	if (length(pr$y) < 48) return(empty)
+	t <- pr$t; y <- pr$y; ml <- pr$ml
+
+	cand <- tryCatch(switch(detector,
+		envcpt = do.call(.bpCandidatesEnvCpt, c(list(y = y), detector_args)),
+		pelt   = do.call(.bpCandidatesPELT,   c(list(t = t, y = y), detector_args))),
+		error = function(e) structure(integer(0), error = conditionMessage(e)))
+	if (!length(cand)) { attr(empty, "error") <- attr(cand, "error"); return(empty) }
+
+	rows <- lapply(unique(t[cand]), function(ct)
+		.bpCharacterise(t, y, ct, T_c = .bpTimescale(t, ml, ct, abrupt_months, Linf, K, t0), window = window))
+	rows <- rows[!vapply(rows, is.null, logical(1))]
+	if (!length(rows)) return(empty)
+	ch <- do.call(rbind, rows)
+	ch <- ch[ch$p_nominal < alpha, , drop = FALSE]
+	if (nrow(ch) == 0) return(empty)
+	ch <- .bpDedupe(ch)
+
+	ch$cand_date  <- .bpIdxToDate(ch$cand_t)
+	ch$start_date <- .bpIdxToDate(ch$s_hat)
+	ch$end_date   <- .bpIdxToDate(ch$s_hat + ch$d_hat)
+	ch$delta_rel  <- if (variable == "CPUE") expm1(ch$delta) else ch$delta / abs(ch$pre_level)
+	ch$class <- .bpClassify(ch, transient_tau_frac)
+
+	ch$comp_change <- ch$p_comp <- ch$reloc_km <- ch$p_reloc <- NA_real_
+	ch$label <- ch$class
+	if (!is.null(spatial_table)) {
+		for (i in seq_len(nrow(ch))) {
+			sp <- .bpSpatialTest(ch$s_hat[i], ch$d_hat[i], spatial_table, window = spatial_window)
+			ch$comp_change[i] <- sp$comp_change; ch$p_comp[i]  <- sp$p_comp
+			ch$reloc_km[i]    <- sp$reloc_km;    ch$p_reloc[i] <- sp$p_reloc
+		}
+		ch$label <- .bpSpatialLabel(ch$class, ch$p_comp, ch$p_reloc, spatial_alpha)
+	}
+	out <- ch[order(ch$s_hat), names(empty)]
+	rownames(out) <- NULL
+	out
+}
+
+#' Mark changes found at the same time in most clusters
+#'
+#' A change is "common" if, for the same variable, at least
+#' `ceiling(min_share * n_clusters)` clusters (and at least 2) have a change
+#' starting within `tol_months` of it. Such changes point to data or
+#' reporting events (or a fleet appearing in every cluster) rather than to
+#' the clustering. Changes labelled "switch" (membership change mirrored by
+#' another cluster: rows moving between clusters) are never common and are
+#' not counted: they change several clusters at once and would otherwise
+#' pass as common (always, at K = 2). Unmirrored "composition" changes can
+#' be common: the same membership change in most clusters at once is a
+#' fleet-wide or data event, not a clustering problem.
+#'
+#' @param bp Output of [analyseClusterBreakpoints()] (columns `cluster`,
+#'   `variable`, `start_date`).
+#' @param n_clusters Number of clusters analysed.
+#' @param tol_months Tolerance on start dates. Default 6.
+#' @param min_share Share of clusters required. Default 0.75.
+#' @return `bp` with a logical column `common`.
+#' @family breakpoint analysis
+#' @export
+flagCommonBreaks <- function(bp, n_clusters, tol_months = 6, min_share = 0.75) {
+	bp$common <- logical(nrow(bp))
+	need <- max(2, ceiling(min_share * n_clusters))
+	if (nrow(bp) == 0 || n_clusters < 2) return(bp)
+	mi <- .bpMonthIdx(bp$start_date)
+	eligible <- if (is.null(bp$label)) rep(TRUE, nrow(bp)) else bp$label != "switch"
+	for (i in which(eligible)) {
+		same <- eligible & bp$variable == bp$variable[i] & abs(mi - mi[i]) <= tol_months
+		bp$common[i] <- length(unique(bp$cluster[same])) >= need
+	}
+	bp
+}
+
+## Rows per flag after minus before the change, in one cluster.
+.bpFlagDelta <- function(tab, s, d, window) {
+	ia <- tab$mi >= s - window & tab$mi < s
+	ib <- tab$mi >= s + d & tab$mi < s + d + window
+	colSums(tab$n[ib, , drop = FALSE]) - colSums(tab$n[ia, , drop = FALSE])
+}
+
+## Is a composition change in cluster `cl` (start month index s, duration d)
+## mirrored by another cluster? Per flag, rows gained by `cl` and lost by the
+## other cluster (and the reverse) count as moved (the smaller of the two).
+## Mirror share = moved / total per-flag change in `cl` (0-1). Overall fleet
+## growth or decline (same sign in both clusters) does not count.
+## Returns list(share, cluster) for the best-matching other cluster.
+.bpMirror <- function(tabs, cl, s, d, window = 12) {
+	dc <- .bpFlagDelta(tabs[[cl]], s, d, window)
+	tot <- sum(abs(dc))
+	others <- setdiff(names(tabs), cl)
+	if (!length(others) || tot == 0) return(list(share = NA_real_, cluster = NA))
+	shares <- vapply(others, function(o) {
+		d2 <- .bpFlagDelta(tabs[[o]], s, d, window)
+		fl <- union(names(dc), names(d2))
+		a <- stats::setNames(numeric(length(fl)), fl); b <- a
+		a[names(dc)] <- dc; b[names(d2)] <- d2
+		sum(pmin(pmax(a, 0), pmax(-b, 0)) + pmin(pmax(-a, 0), pmax(b, 0))) / tot
+	}, numeric(1))
+	list(share = max(shares), cluster = others[which.max(shares)], all = shares)
+}
+
+#' Breakpoint analysis for all clusters and variables
+#'
+#' @param ts Output of [aggregateClusterTimeSeries()] (`cluster`, `date`,
+#'   `CPUE`, `mean_len`, `mean_hbf`).
+#' @param df Row-level data (for the composition / relocation test), or
+#'   `NULL` to skip it.
+#' @param variables Variables to analyse.
+#' @param group Fleet-unit column of `df`. Default `"flag"`.
+#' @param hbf_abrupt_months Fixed timescale for `mean_hbf` (gear changes are
+#'   not tied to cohort turnover). Default 12. `NULL` = cohort timescale.
+#' @param common_tol_months,common_min_share Passed to [flagCommonBreaks()].
+#' @param mirror_min Share of a composition change mirrored by another
+#'   cluster (rows gained here lost there, or the reverse) above which it is
+#'   relabelled "switch". Default 0.5.
+#' @param spatial_window Months before / after for the composition,
+#'   relocation and mirror tests. Default 12.
+#' @param ... Passed to [analyseBreakpoints()].
+#' @return Data frame with `cluster`, `variable`, the columns of
+#'   [analyseBreakpoints()], `mirror_share`, `mirror_cluster` and `common`.
+#' @family breakpoint analysis
+#' @export
+analyseClusterBreakpoints <- function(ts, df = NULL, variables = c("CPUE", "mean_len", "mean_hbf"),
+									  group = "flag", hbf_abrupt_months = 12,
+									  common_tol_months = 6, common_min_share = 0.75,
+									  mirror_min = 0.5, spatial_window = 12, ...) {
+	clusters <- sort(unique(ts$cluster))
+	tabs <- if (is.null(df)) NULL else
+		stats::setNames(lapply(clusters, function(cl) spatialMonthTable(df, cl, group = group)),
+						as.character(clusters))
+	rows <- list()
+	for (cl in clusters) {
+		d <- ts[ts$cluster == cl, , drop = FALSE]
+		tab <- if (is.null(tabs)) NULL else tabs[[as.character(cl)]]
+		for (v in variables) {
+			res <- analyseBreakpoints(d$date, d[[v]], v, d$mean_len, spatial_table = tab,
+										spatial_window = spatial_window,
+										abrupt_months = if (v == "mean_hbf") hbf_abrupt_months else NULL, ...)
+			if (nrow(res)) rows[[length(rows) + 1]] <- cbind(cluster = cl, variable = v, res,
+															 stringsAsFactors = FALSE)
+		}
+	}
+	out <- if (length(rows)) do.call(rbind, rows) else
+		cbind(data.frame(cluster = ts$cluster[0], variable = character()), .bpEmpty())
+
+	out$mirror_share   <- rep(NA_real_, nrow(out))
+	out$mirror_cluster <- rep(NA_character_, nrow(out))
+	if (!is.null(tabs)) for (i in which(out$label == "composition")) {
+		m <- .bpMirror(tabs, as.character(out$cluster[i]), .bpMonthIdx(out$start_date[i]), out$d_hat[i],
+					   window = spatial_window)
+		out$mirror_share[i]   <- m$share
+		out$mirror_cluster[i] <- as.character(m$cluster)
+		if (!is.na(m$share) && m$share >= mirror_min) out$label[i] <- "switch"
+	}
+	flagCommonBreaks(out, length(clusters), common_tol_months, common_min_share)
+}
+
+#' Plot one series with the changes found by analyseBreakpoints()
+#'
+#' @param dates,x The series.
+#' @param bp Rows of [analyseBreakpoints()] / [analyseClusterBreakpoints()]
+#'   for this series (may be 0 rows).
+#' @param y_lab Y-axis label.
+#' @return A ggplot object.
+#' @family breakpoint analysis
+#' @export
+plotBreakpoints <- function(dates, x, bp, y_lab = NULL) {
+	cols <- c(unexplained = "#d7301f", abrupt = "#d7301f", switch = "#ae017e", composition = "#7a0177",
+			  relocation = "#2b8cbe", transient = "#41ab5d", gradual = "#969696",
+			  ambiguous = "#fdae61", common = "#000000")
+	p <- ggplot2::ggplot(data.frame(date = dates, x = x), ggplot2::aes(date, x)) +
+		ggplot2::geom_line(linewidth = 0.3)
+	if (!is.null(bp) && nrow(bp) > 0) {
+		bp$lab <- if ("common" %in% names(bp)) ifelse(bp$common, "common", bp$label) else bp$label
+		bp$end_plot <- pmax(bp$end_date, bp$start_date + 20)
 		p <- p +
-			ggplot2::geom_vline(data = bp_table,
-								ggplot2::aes(xintercept = as.numeric(bp_date), linetype = status),
-								colour = "firebrick") +
-			ggplot2::scale_linetype_manual(name = NULL, values = c(valid = "solid", rejected = "dashed"))
+			ggplot2::geom_rect(data = bp, ggplot2::aes(xmin = start_date, xmax = end_plot, ymin = -Inf, ymax = Inf,
+													   fill = lab), alpha = 0.35, inherit.aes = FALSE) +
+			ggplot2::geom_vline(data = bp, ggplot2::aes(xintercept = start_date, colour = lab), linewidth = 0.4) +
+			ggplot2::scale_fill_manual(values = cols, name = NULL) +
+			ggplot2::scale_colour_manual(values = cols, guide = "none")
 	}
-	p
+	p + ggplot2::labs(x = NULL, y = y_lab) + ggplot2::theme_bw()
 }

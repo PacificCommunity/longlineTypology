@@ -49,15 +49,16 @@ detected; \code{local_test_pass} says whether it would have passed the local
 test, and \code{envcpt} shows why EnvCpt did or did not propose it.
 }
 \seealso{
-Other breakpoint analysis v2:
-\code{\link[=analyseBreakpointsV2]{analyseBreakpointsV2()}},
+Other breakpoint analysis:
+\code{\link[=aggregateClusterTimeSeries]{aggregateClusterTimeSeries()}},
+\code{\link[=analyseBreakpoints]{analyseBreakpoints()}},
 \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
 \code{\link[=breakpointContext]{breakpointContext()}},
 \code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
-\code{\link[=plotBreakpointsV2]{plotBreakpointsV2()}},
+\code{\link[=plotBreakpoints]{plotBreakpoints()}},
 \code{\link[=plotInspection]{plotInspection()}},
 \code{\link[=rankBreakpoints]{rankBreakpoints()}},
 \code{\link[=spatialMonthTable]{spatialMonthTable()}},
 \code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }
-\concept{breakpoint analysis v2}
+\concept{breakpoint analysis}

@@ -1,203 +1,156 @@
-## Coverage for R/breakpoints.R. Deterministic arithmetic checks use exact
-## expect_equal(); anything downstream of cpt.mean()/loess() on synthetic
-## random data uses large, unambiguous signal-to-noise ratios and checks
-## qualitative properties (sign, membership, structure) rather than exact
-## values, so they survive minor package-version differences in those
-## algorithms. Not run against a live R session while writing this --
-## verify once and report back if any threshold needs tuning.
+## Tests for R/breakpoints.R. Synthetic series with large signal-to-noise
+## so outcomes do not depend on package versions of EnvCpt / changepoint.
 
-# ---- ageFromLength() --------------------------------------------------
-
-test_that("ageFromLength() matches the formula and flags length >= Linf", {
-	expect_equal(ageFromLength(0), -0.244)  # log(1 - 0/Linf) == 0 -> age == t0
-
-	L <- 120
-	expect_equal(ageFromLength(L), -0.244 - log(1 - L / 150.3) / 0.442 * 365)
-
-	expect_warning(res <- ageFromLength(c(100, 150.3, 160)), "length\\(s\\) >= Linf")
-	expect_false(is.na(res[1]))
-	expect_true(is.na(res[2]))
-	expect_true(is.na(res[3]))
-})
-
-
-# ---- validateBreakpointAge() -------------------------------------------
-
-test_that("validateBreakpointAge() skip = TRUE bypasses the test entirely", {
-	bp_dates <- as.Date(c("2000-01-01", "2005-01-01"))
-	out <- validateBreakpointAge(bp_dates, dates = bp_dates, mean_len = c(120, 120),
-								 series_end = as.Date("2010-01-01"), skip = TRUE)
-	expect_equal(nrow(out), 2)
-	expect_true(all(out$passed))
-	expect_true(all(is.infinite(out$age_limit_days)))
-})
-
-test_that("validateBreakpointAge() computes phase_days against the next breakpoint or series_end", {
-	bp_dates   <- as.Date(c("2000-01-15", "2001-01-15"))
-	dates      <- seq(as.Date("1995-01-15"), as.Date("2005-01-15"), by = "month")
-	mean_len   <- rep(100, length(dates))
-	series_end <- max(dates)
-
-	out <- validateBreakpointAge(bp_dates, dates, mean_len, series_end)
-	expect_equal(out$phase_days[1], as.numeric(bp_dates[2] - bp_dates[1]))
-	expect_equal(out$phase_days[2], as.numeric(series_end - bp_dates[2]))
-})
-
-test_that("validateBreakpointAge() handles zero breakpoints", {
-	out <- validateBreakpointAge(as.Date(character()), as.Date(character()),
-								 numeric(), as.Date("2000-01-01"))
-	expect_equal(nrow(out), 0)
-	expect_named(out, c("bp_date", "age_limit_days", "phase_days", "passed"))
-})
-
-
-# ---- calculateDistance() / calculateFleetSpread() / calculateSpatialOverlap() ----
-
-test_that("calculateDistance() is 0 for identical points, symmetric, and matches a known value", {
-	expect_equal(calculateDistance(-20, 160, -20, 160), 0)
-
-	d1 <- calculateDistance(-20, 160, -25, 165)
-	d2 <- calculateDistance(-25, 165, -20, 160)
-	expect_equal(d1, d2)
-	expect_true(d1 > 0)
-
-	## London to Paris, ~344 km great-circle
-	d <- calculateDistance(51.5074, -0.1278, 48.8566, 2.3522)
-	expect_equal(d, 344, tolerance = 5)
-})
-
-test_that("calculateFleetSpread() returns 0 for 0/1 points and increases with dispersion", {
-	expect_equal(calculateFleetSpread(numeric(0), numeric(0), c(0, 0)), 0)
-	expect_equal(calculateFleetSpread(1, 1, c(1, 1)), 0)
-
-	centroid <- c(160, -20)
-	tight <- calculateFleetSpread(c(160, 160.1, 159.9), c(-20, -20.1, -19.9), centroid)
-	wide  <- calculateFleetSpread(c(158, 162, 160), c(-22, -18, -20), centroid)
-	expect_true(wide > tight)
-})
-
-test_that("calculateSpatialOverlap() is 1 for co-located points and 0 for disjoint ones", {
-	pts <- data.frame(longitude = c(160, 160.2), latitude = c(-20, -20.1))
-	expect_equal(calculateSpatialOverlap(pts, pts), 1)
-
-	near <- data.frame(longitude = c(160.05, 160.15), latitude = c(-20.05, -20.05))
-	expect_equal(calculateSpatialOverlap(pts, near), 1)  # same 1-degree cell
-
-	disjoint <- data.frame(longitude = c(-170, -170.2), latitude = c(20, 20.1))
-	expect_equal(calculateSpatialOverlap(pts, disjoint), 0)
-})
-
-
-# ---- calculateClusterMovementBaseline() / evaluateBreakpointMovement() ----
-
-make_fleet_df <- function(n_periods = 20, cluster_id = 1, jump_at = NULL, n_per_period = 20) {
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = n_periods)
-	do.call(rbind, lapply(seq_along(dates), function(i) {
-		base_lon <- 160; base_lat <- -20
-		if (!is.null(jump_at) && i >= jump_at) { base_lon <- 170; base_lat <- -10 }
-		data.frame(cluster = cluster_id, date = dates[i],
-				   longitude = base_lon + stats::rnorm(n_per_period, sd = 0.2),
-				   latitude  = base_lat + stats::rnorm(n_per_period, sd = 0.2))
-	}))
+mkSeries <- function(n = 420, seed = 1, sd = 1, shift = 0, at = 200, duration = 1) {
+	set.seed(seed)
+	dates <- seq(as.Date("1990-01-15"), by = "month", length.out = n)
+	r <- pmin(pmax((seq_len(n) - at + 1) / duration, 0), 1)
+	list(dates = dates, x = 100 + shift * r + stats::rnorm(n, sd = sd))
 }
 
-test_that("calculateClusterMovementBaseline() returns one metric per consecutive date pair", {
-	set.seed(1)
-	df <- make_fleet_df(n_periods = 10)
-	baseline <- calculateClusterMovementBaseline(df, cluster_id = 1)
-	expect_length(baseline$raw_metrics$centroid_distances, 9)
-	expect_true(all(c("mean", "sd", "q10", "q25", "q75", "q90") %in%
-						names(baseline$thresholds$centroid_distance)))
+test_that("vbAgeMonths() uses t0 in years and returns NA at or above Linf", {
+	expect_equal(vbAgeMonths(0), -0.244 * 12)
+	L <- 117
+	expect_equal(vbAgeMonths(L), (-0.244 - log(1 - L / 150.3) / 0.442) * 12)
+	expect_true(is.na(vbAgeMonths(150.3)))
+	expect_true(is.na(vbAgeMonths(NA)))
 })
 
-test_that("evaluateBreakpointMovement() rejects an unrecognised strictness", {
-	set.seed(1)
-	df <- make_fleet_df(n_periods = 10)
-	baseline <- calculateClusterMovementBaseline(df, cluster_id = 1)
-	expect_error(
-		evaluateBreakpointMovement(1, 0.5, 0.1, baseline$thresholds, strictness = "extreme"),
-		"strictness must be one of"
-	)
+test_that("analyseBreakpoints() returns a typed 0-row frame on a flat series", {
+	skip_if_not_installed("EnvCpt")
+	s <- mkSeries(seed = 2)
+	out <- analyseBreakpoints(s$dates, s$x, "mean_len", rep(117, 420))
+	expect_s3_class(out, "data.frame")
+	expect_true(all(c("start_date", "d_hat", "label") %in% names(out)))
+	expect_false(any(out$label %in% c("abrupt", "unexplained")))
 })
 
-test_that("evaluateBreakpointMovement() strict mode needs 2 criteria, lenient/moderate need 1", {
-	thresholds <- list(
-		centroid_distance = list(mean = 10, sd = 2,   q75 = 12,  q90 = 15),
-		spatial_overlap   = list(mean = 0.8, sd = 0.1, q25 = 0.7, q10 = 0.6),
-		spread_change     = list(mean = 0.1, sd = 0.05, q75 = 0.15, q90 = 0.2)
-	)
-	## only the distance criterion is breached
-	res_lenient  <- evaluateBreakpointMovement(20, 0.75, 0.1, thresholds, "lenient")
-	res_moderate <- evaluateBreakpointMovement(20, 0.75, 0.1, thresholds, "moderate")
-	res_strict   <- evaluateBreakpointMovement(20, 0.75, 0.1, thresholds, "strict")
-
-	expect_true(res_lenient$is_significant)
-	expect_true(res_moderate$is_significant)
-	expect_false(res_strict$is_significant)  # needs 2 criteria, only 1 breached
+test_that("a large abrupt step is found at the right time and classified abrupt", {
+	skip_if_not_installed("EnvCpt")
+	s <- mkSeries(shift = 8, seed = 3)
+	out <- analyseBreakpoints(s$dates, s$x, "mean_len", rep(117, 420))
+	expect_gte(nrow(out), 1)
+	best <- out[which.max(out$lr), ]
+	expect_lte(abs(as.numeric(best$start_date - s$dates[200])), 62)   # within ~2 months
+	expect_equal(best$class, "abrupt")
+	expect_equal(best$label, "abrupt")   # no spatial table -> not split further
 })
 
-test_that("validateBreakpointSpatial() flags a relocation and drops a breakpoint with no future data", {
-	set.seed(1)
-	df <- make_fleet_df(n_periods = 24, jump_at = 13)
-	bp_dates <- as.Date(c("2000-06-15", "2001-01-15"))  # one stable period, one at the jump
-	out <- validateBreakpointSpatial(bp_dates, df, cluster_id = 1, strictness = "lenient")
+test_that("a slow ramp is not classified abrupt", {
+	skip_if_not_installed("EnvCpt")
+	s <- mkSeries(shift = 8, seed = 4, duration = 96, at = 150)
+	out <- analyseBreakpoints(s$dates, s$x, "mean_len", rep(117, 420))
+	expect_false(any(out$class == "abrupt"))
+})
 
-	expect_equal(nrow(out), 2)
-	jump_row <- out[out$bp_date == as.Date("2001-01-15"), ]
-	expect_false(jump_row$passed)  # ~1500 km jump vs ~tens-of-km baseline -> significant
+test_that("CPUE is analysed on the log scale (a x2 step is found whatever the level)", {
+	skip_if_not_installed("EnvCpt")
+	set.seed(5)
+	dates <- seq(as.Date("1990-01-15"), by = "month", length.out = 420)
+	x <- 0.05 * exp(c(rep(0, 200), rep(log(2), 220)) + stats::rnorm(420, sd = 0.1))
+	out <- analyseBreakpoints(dates, x, "CPUE", rep(117, 420))
+	expect_gte(sum(out$class == "abrupt"), 1)
+	expect_true(any(abs(out$delta_rel - 1) < 0.3))   # ~ +100 %
+})
 
-	last_date <- max(df$date)
-	out2 <- validateBreakpointSpatial(last_date, df, cluster_id = 1)
-	expect_equal(nrow(out2), 0)  # no observation after the last date -> dropped
+test_that("a composition change labels an abrupt change 'composition'", {
+	skip_if_not_installed("EnvCpt")
+	set.seed(6)
+	dates <- seq(as.Date("1990-01-15"), by = "month", length.out = 420)
+	rows <- do.call(rbind, lapply(seq_along(dates), function(i) {
+		fl <- if (i < 200) c("A", "B") else c("A", "C")      # flag B replaced by C
+		data.frame(cluster = 1, date = dates[i], flag = rep(fl, each = 10),
+				   longitude = 160 + stats::rnorm(20), latitude = -10 + stats::rnorm(20))
+	}))
+	tab <- spatialMonthTable(rows, 1)
+	x <- 100 + c(rep(0, 199), rep(8, 221)) + stats::rnorm(420)
+	out <- analyseBreakpoints(dates, x, "mean_len", rep(117, 420), spatial_table = tab)
+	best <- out[which.max(out$lr), ]
+	expect_equal(best$label, "composition")
+})
+
+test_that("flagCommonBreaks() needs the share of clusters and at least 2", {
+	bp <- data.frame(cluster = c(1, 2, 3, 1), variable = c("CPUE", "CPUE", "CPUE", "mean_len"),
+					 start_date = as.Date(c("2005-01-15", "2005-04-15", "2010-01-15", "2005-01-15")))
+	out <- flagCommonBreaks(bp, n_clusters = 3, tol_months = 6, min_share = 0.6)
+	expect_equal(out$common, c(TRUE, TRUE, FALSE, FALSE))
+	expect_false(any(flagCommonBreaks(bp, n_clusters = 1)$common))
+})
+
+test_that("analyseClusterBreakpoints() and plotBreakpoints() handle series with no change", {
+	skip_if_not_installed("EnvCpt")
+	set.seed(7)
+	dates <- seq(as.Date("1990-01-15"), by = "month", length.out = 120)
+	ts <- data.frame(cluster = rep(1:2, each = 120), date = rep(dates, 2),
+					 CPUE = exp(stats::rnorm(240, sd = 0.05)), mean_len = 117 + stats::rnorm(240),
+					 mean_hbf = 20 + stats::rnorm(240))
+	out <- analyseClusterBreakpoints(ts)
+	expect_true(all(c("cluster", "variable", "label", "common") %in% names(out)))
+	expect_s3_class(plotBreakpoints(dates, ts$mean_len[1:120], out[0, ]), "ggplot")
+})
+
+test_that("flagCommonBreaks() never marks or counts switch changes, but composition can be common", {
+	bp <- data.frame(cluster = c(1, 2), variable = "CPUE",
+					 start_date = as.Date(c("2008-01-15", "2008-02-15")),
+					 label = c("switch", "switch"))
+	expect_false(any(flagCommonBreaks(bp, n_clusters = 2)$common))
+	bp$label <- c("unexplained", "unexplained")
+	expect_true(all(flagCommonBreaks(bp, n_clusters = 2)$common))
+	bp$label <- c("composition", "composition")
+	expect_true(all(flagCommonBreaks(bp, n_clusters = 2)$common))
+	bp$label <- c("switch", "composition")
+	expect_false(any(flagCommonBreaks(bp, n_clusters = 2)$common))
+})
+
+test_that("an ambiguous change can still be labelled composition, never unexplained", {
+	skip_if_not_installed("EnvCpt")
+	set.seed(8)
+	dates <- seq(as.Date("1990-01-15"), by = "month", length.out = 420)
+	rows <- do.call(rbind, lapply(seq_along(dates), function(i) {
+		fl <- if (i < 200) c("A", "B") else c("A", "C")
+		data.frame(cluster = 1, date = dates[i], flag = rep(fl, each = 10),
+				   longitude = 160 + stats::rnorm(20), latitude = -10 + stats::rnorm(20))
+	}))
+	tab <- spatialMonthTable(rows, 1)
+	x <- 100 + c(rep(0, 199), rep(8, 221)) + stats::rnorm(420)
+	## timescale set so that any estimated duration > 1 month straddles it
+	out <- analyseBreakpoints(dates, x, "mean_len", rep(117, 420), spatial_table = tab, abrupt_months = 1)
+	expect_false(any(out$class == "ambiguous" & out$label == "unexplained"))
+	expect_true(all(out$label[out$class == "ambiguous"] %in% c("ambiguous", "composition", "relocation")))
+})
+
+test_that("rows moving between two clusters are labelled 'switch', a new fleet stays 'composition'", {
+	skip_if_not_installed("EnvCpt")
+	set.seed(9)
+	dates <- seq(as.Date("1990-01-15"), by = "month", length.out = 420)
+	mk <- function(move) do.call(rbind, lapply(seq_along(dates), function(i) {
+		after <- i >= 200
+		## cluster 1: flags A, B; cluster 2: flags C, D. From month 200, flag B
+		## either moves to cluster 2 (move = TRUE) or leaves cluster 1 and a new
+		## flag E appears in cluster 2 (move = FALSE).
+		fl1 <- if (after) "A" else c("A", "B")
+		fl2 <- if (!after) c("C", "D") else if (move) c("C", "D", "B") else c("C", "D", "E")
+		rbind(data.frame(cluster = 1, date = dates[i], flag = rep(fl1, each = 10)),
+			  data.frame(cluster = 2, date = dates[i], flag = rep(fl2, each = 10)))
+	}))
+	res <- lapply(c(TRUE, FALSE), function(move) {
+		rows <- mk(move)
+		rows$longitude <- 160 + stats::rnorm(nrow(rows)); rows$latitude <- -10 + stats::rnorm(nrow(rows))
+		ts <- data.frame(cluster = rep(1:2, each = 420), date = rep(dates, 2),
+						 CPUE = exp(stats::rnorm(840, sd = 0.05)),
+						 mean_len = c(117 + stats::rnorm(420), 110 + c(rep(0, 199), rep(8, 221)) + stats::rnorm(420)),
+						 mean_hbf = 20 + stats::rnorm(840))
+		out <- analyseClusterBreakpoints(ts, rows, variables = "mean_len")
+		out[out$cluster == 2, ][which.max(out$lr[out$cluster == 2]), ]
+	})
+	expect_equal(res[[1]]$label, "switch")
+	expect_equal(res[[1]]$mirror_cluster, "1")
+	expect_equal(res[[2]]$label, "composition")
+	expect_false(res[[1]]$common)
 })
 
 
-# ---- detectChangepoints() ----------------------------------------------
-
-test_that("detectChangepoints() returns NULL for a too-short series", {
-	dates <- seq(as.Date("2000-01-01"), by = "month", length.out = 10)
-	expect_null(detectChangepoints(dates, stats::rnorm(10), min_segment_length = 12))
-})
-
-test_that("detectChangepoints() detects structure and separates segment means for an obvious level shift", {
-	## NOTE: an instant step is a stress case for the segment-classification
-	## heuristic, not for changepoint detection itself. LOESS smoothing (span
-	## 0.2) spreads the step into a ~24-point ramp, which cpt.mean() reads as
-	## 3-4 segments rather than 2 -- expected. Separately, the edge segments
-	## far from the ramp can get misclassified as "increasing"/"decreasing"
-	## because their slope is compared to their OWN (LOESS-smoothed, near-zero)
-	## SD -- see the file header. That blocks the higher-level stable-to-stable
-	## candidate rule in a way this test deliberately does not assert on,
-	## since it's a property of the classification heuristic, not something
-	## this port changed. This checks only what's robust: raw changepoints
-	## were found, and the resulting segments actually separate the two levels.
-	set.seed(42)
-	n <- 120
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = n)
-	x <- c(rnorm(60, mean = 100, sd = 1), rnorm(60, mean = 130, sd = 1))
-
-	res <- detectChangepoints(dates, x, min_segment_length = 12)
-	expect_false(is.null(res))
-	expect_true(is.data.frame(res$segment_info))
-	expect_true(nrow(res$segment_info) >= 2)
-	expect_true(diff(range(res$segment_info$mean_value)) > 20)  # ~30-unit shift should show up
-})
-
-test_that("detectChangepoints() returns no *surviving* candidates for a shift close to the series end", {
-	## As above: this can return empty either because the end-of-series trim
-	## worked, or because classification never reached the candidate stage at
-	## all -- it isolates neither cause specifically, only the overall
-	## guarantee that a breakpoint this close to the end never survives.
-	set.seed(42)
-	n <- 30
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = n)
-	x <- c(rnorm(20, mean = 100, sd = 1), rnorm(10, mean = 130, sd = 1))
-	res <- detectChangepoints(dates, x, min_segment_length = 8)
-	expect_true(is.null(res) || length(res$bp_dates) == 0)
-})
-
-
-# ---- aggregateClusterTimeSeries() ---------------------------------------
+# ---- aggregateClusterTimeSeries() ---------------------------------------------
 
 test_that("aggregateClusterTimeSeries() aggregates CPUE/mean_len/mean_hbf correctly", {
 	df <- data.frame(
@@ -226,76 +179,52 @@ test_that("aggregateClusterTimeSeries() aggregates CPUE/mean_len/mean_hbf correc
 })
 
 
-# ---- analyseBreakpoints() -- integration, including the reported bug ----
+test_that("aggregateClusterTimeSeries() leaves imputed length and HBF out unless asked", {
+	df <- data.frame(
+		cluster     = 1,
+		ymd         = as.Date("2000-01-15"),
+		yft_n       = c(10, 10, 10),
+		E           = c(1, 1, 1),
+		mean_len    = c(100, 120, 200),
+		mean_hbf    = c(10, 20, 90),
+		len_source  = c("operational", "operational", "imputed"),
+		hbf_outlier = c("valid", "valid", "imputed"))
+	out <- aggregateClusterTimeSeries(df)
+	expect_equal(out$mean_len, 110)
+	expect_equal(out$mean_hbf, 15)
+	expect_equal(out$n_len, 2)
+	expect_equal(out$CPUE, 10)   # CPUE uses every row
 
-test_that("analyseBreakpoints() returns NULL when detectChangepoints() does", {
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = 5)
-	df <- data.frame(cluster = 1, date = dates, longitude = 160, latitude = -20)
-	expect_null(analyseBreakpoints(dates, stats::rnorm(5), mean_len = rep(100, 5),
-								   df = df, cluster_id = 1, min_segment_length = 12))
+	all_rows <- aggregateClusterTimeSeries(df, use_imputed = TRUE)
+	expect_equal(all_rows$mean_len, mean(c(100, 120, 200)))
+	expect_equal(all_rows$n_hbf, 3)
+
+	## a month with only imputed values gets NA, not 0
+	df1 <- df[3, ]
+	expect_true(is.na(aggregateClusterTimeSeries(df1)$mean_len))
 })
 
-test_that("analyseBreakpoints() returns a well-typed 0-row data frame when no candidates survive (regression: this used to leak a list straight to plotBreakpoints())", {
-	set.seed(1)
-	n <- 60
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = n)
-	x  <- stats::rnorm(n, mean = 100, sd = 0.5)  # flat -- no meaningful changepoints
-	df <- data.frame(cluster = 1, date = dates,
-					 longitude = 160 + stats::rnorm(n, sd = 0.1),
-					 latitude  = -20 + stats::rnorm(n, sd = 0.1))
+# ---- spatialMonthTable() and the PELT detector ---------------------------------
 
-	out <- analyseBreakpoints(dates, x, mean_len = rep(120, n), df = df, cluster_id = 1,
-							  min_segment_length = 12)
-
-	expect_s3_class(out, "data.frame")
-	expect_equal(nrow(out), 0)
-	expect_named(out, c("bp_date", "age_limit_days", "phase_days", "passed_age",
-						"centroid_distance", "spatial_overlap", "spread_change_ratio",
-						"passed_spatial", "valid"))
-
-	## the actual failure mode reported: plotBreakpoints() must not error on this
-	p <- plotBreakpoints(dates, x, out)
-	expect_s3_class(p, "ggplot")
+test_that("spatialMonthTable() sums rows and positions per month and flag", {
+	df <- data.frame(
+		cluster   = c(1, 1, 1, 1, 2),
+		date      = as.Date(c("2000-01-15", "2000-01-15", "2000-01-15", "2000-02-15", "2000-01-15")),
+		flag      = c("A", "A", "B", "A", "A"),
+		longitude = c(160, 162, 170, NA, 150),
+		latitude  = c(-10, -12, -5, 0, 0))
+	tab <- spatialMonthTable(df, cluster_id = 1)
+	expect_equal(length(tab$mi), 1)            # February row has no longitude
+	expect_equal(tab$n[1, "A"], 2)
+	expect_equal(tab$n[1, "B"], 1)
+	expect_equal(tab$slon[1, "A"], 322)
+	expect_equal(tab$slat[1, "B"], -5)
 })
 
-test_that("analyseBreakpoints() marks a breakpoint invalid (not NA) when spatial validation drops it", {
-	set.seed(2)
-	n <- 60
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = n)
-	x <- c(stats::rnorm(30, mean = 100, sd = 0.5), stats::rnorm(30, mean = 130, sd = 0.5))
-	## df only covers up to the shift -> validateBreakpointSpatial() finds no
-	## "next_date" for any candidate near it and drops the row from its merge
-	df <- data.frame(cluster = 1, date = dates[1:31],
-					 longitude = 160 + stats::rnorm(31, sd = 0.1),
-					 latitude  = -20 + stats::rnorm(31, sd = 0.1))
-
-	out <- analyseBreakpoints(dates, x, mean_len = rep(120, n), df = df, cluster_id = 1,
-							  skip_age = TRUE, min_segment_length = 12)
-
-	expect_s3_class(out, "data.frame")
-	if (nrow(out) > 0) expect_true(all(!out$valid))  # never NA -- see analyseBreakpoints()
-})
-
-
-# ---- plotBreakpoints() --------------------------------------------------
-
-test_that("plotBreakpoints() handles NULL and 0-row bp_table without error", {
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = 24)
-	x <- stats::rnorm(24)
-
-	expect_s3_class(plotBreakpoints(dates, x, NULL), "ggplot")
-
-	empty <- data.frame(bp_date = as.Date(character()), valid = logical())
-	expect_s3_class(plotBreakpoints(dates, x, empty), "ggplot")
-})
-
-test_that("plotBreakpoints() draws a vline layer when bp_table has rows", {
-	dates <- seq(as.Date("2000-01-15"), by = "month", length.out = 24)
-	x <- stats::rnorm(24)
-	bp_table <- data.frame(bp_date = dates[c(10, 15)], valid = c(TRUE, FALSE))
-
-	p <- plotBreakpoints(dates, x, bp_table)
-	expect_s3_class(p, "ggplot")
-	has_vline <- vapply(p$layers, function(l) inherits(l$geom, "GeomVline"), logical(1))
-	expect_true(any(has_vline))
+test_that("the PELT detector also finds a large abrupt step", {
+	s <- mkSeries(shift = 8, seed = 3)
+	out <- analyseBreakpoints(s$dates, s$x, "mean_len", rep(117, 420), detector = "pelt")
+	expect_gte(nrow(out), 1)
+	best <- out[which.max(abs(out$delta)), ]
+	expect_lte(abs(as.numeric(best$start_date - s$dates[200])), 62)
 })

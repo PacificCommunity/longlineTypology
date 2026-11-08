@@ -7,8 +7,8 @@
 centroidVariability(diagnostics, k, scores)
 }
 \arguments{
-\item{diagnostics}{The diagnostics list saved by the clustering vignette,
-or the path to \code{cluster_diagnostics.RDS}.}
+\item{diagnostics}{The diagnostics list returned by \code{\link[=runClustering]{runClustering()}},
+or the path to the \code{cluster_diagnostics.RDS} file it saved.}
 
 \item{k}{Number of clusters.}
 

@@ -10,10 +10,8 @@ Description: Implements a k-means clustering method to develop a typology
     length-frequency data in the format produced by the 'seafisheries'
     package, though any correctly formatted fisheries data can be used.
     The clustering method is described in the manuscript,
-    "A comprehensive method to integrate fisheries data in
-    spatially-explicit population dynamics models". This is a base-R build:
-    functionally identical to the upstream package but with the dplyr, rlang
-    and factoextra dependencies removed. See BASE-R-CHANGES.md.
+    "A comprehensive method to integrate fisheries data into
+    spatially-explicit population dynamics models".
 License: GPL (>= 3)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

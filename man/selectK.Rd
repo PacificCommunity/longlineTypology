@@ -18,9 +18,8 @@ Integer; the selected number of clusters.
 \description{
 Wraps \code{cluster::maxSE()} and returns the actual number of clusters \code{k},
 not a row position. \code{cluster::maxSE()} returns a POSITION in the vector
-it is given: \code{customKmeans()} gets away with
-\code{nc <- cluster::maxSE(gap_stat$Tab[, "gap"], ...)} only because
-\code{clusGap()} always starts at \code{k = 1}, so position and \code{k} coincide. If
+it is given, which equals \code{k} only when the table starts at \code{k = 1} (as
+\code{clusGap()} tables always do). If
 \code{\link[=fastClusGap]{fastClusGap()}} was called with \code{k.min > 1} to skip the expensive \code{k = 1}
 case, position and \code{k} differ by one, and calling \code{maxSE()} directly on
 the table would silently return the wrong cluster count. Always go

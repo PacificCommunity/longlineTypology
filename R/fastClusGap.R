@@ -1,14 +1,13 @@
 ## fastClusGap.R -- exact O(n) replacement for cluster::clusGap when d.power = 2
 ##
-## WHY. seafisheries::customKmeans() calls cluster::clusGap(..., d.power = 2).
-## clusGap computes W_k inside its internal W.k() as
+## WHY. cluster::clusGap() computes W_k inside its internal W.k() as
 ##     0.5 * sum_r ( sum(dist(X_r)^d.power) / n_r )
 ## i.e. it builds the FULL PAIRWISE DISTANCE MATRIX of every cluster, for every
 ## k in 1:K.max, for the real data and for each of the B reference datasets.
 ## That is O(n^2) in both time and memory. The k = 1 call is the worst: one
 ## dist() over all n rows, which is n(n-1)/2 doubles -- 1.5 GB at n = 20,000 and
-## 149 GB at n = 200,000. This, not the clustering, is what makes the gap step
-## take days, and it is why a 1% subsample was the largest that would run.
+## 149 GB at n = 200,000. This, not the clustering, is what makes the gap
+## statistic slow on large samples.
 ##
 ## THE IDENTITY. For squared Euclidean distance (d.power = 2),
 ##     sum_{i<j in r} ||x_i - x_j||^2  ==  n_r * sum_{i in r} ||x_i - mu_r||^2
@@ -22,7 +21,7 @@
 ## NOTE. The identity holds ONLY for d.power = 2. clusGap's default is
 ## d.power = 1 (plain Euclidean), which has no closed form. d.power = 2 is the
 ## version that matches Tibshirani et al. (2001) for K-means, and is what
-## customKmeans() already passes, so nothing changes statistically.
+## customKmeans() uses by default.
 ##
 ## Cost, measured (4 dims, K.max = 20, one core):
 ##   cluster::clusGap  n = 20,000  ~20 min per call at B = 100 ; O(n^2) beyond
@@ -193,9 +192,8 @@ fastClusGap <- function(x, K.max, B = 100L, nstart = 1L, iter.max = 30L,
 #'
 #' Wraps `cluster::maxSE()` and returns the actual number of clusters `k`,
 #' not a row position. `cluster::maxSE()` returns a POSITION in the vector
-#' it is given: `customKmeans()` gets away with
-#' `nc <- cluster::maxSE(gap_stat$Tab[, "gap"], ...)` only because
-#' `clusGap()` always starts at `k = 1`, so position and `k` coincide. If
+#' it is given, which equals `k` only when the table starts at `k = 1` (as
+#' `clusGap()` tables always do). If
 #' [fastClusGap()] was called with `k.min > 1` to skip the expensive `k = 1`
 #' case, position and `k` differ by one, and calling `maxSE()` directly on
 #' the table would silently return the wrong cluster count. Always go
@@ -260,18 +258,3 @@ checkWkIdentity <- function(X, k = 5L, tol = 1e-8) {
 		"  0.5*tot.withinss =", 0.5 * km$tot.withinss, "\n")
 	invisible(TRUE)
 }
-
-## --- drop-in use in customKmeans() -------------------------------------------
-## replace
-##   gap_stat <- cluster::clusGap(x = data_df, FUNcluster = kmeans, K.max = max_k,
-##                               B = random_set, d.power = d.power,
-##                               nstart = nstart, iter.max = iter_max)
-##   nc <- cluster::maxSE(gap_stat$Tab[, "gap"], gap_stat$Tab[, "SE.sim"],
-##                        method = "Tibs2001SEmax", SE.factor = 1)
-## with
-##   Tab <- fastClusGap(data_df, K.max = max_k, B = random_set,
-##                      nstart = nstart, iter.max = iter_max)
-##   nc  <- selectK(Tab)
-## and use `Tab` wherever `gap_stat$Tab` was used (same four columns). Note the
-## gap-curve plot in customKmeans() builds its k axis as `1:max_k`; with k.min
-## kept at 1 that is still correct, otherwise use attr(Tab, "k").

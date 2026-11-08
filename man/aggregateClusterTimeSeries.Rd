@@ -36,10 +36,8 @@ sorted by cluster then date.
 \description{
 Minimal, purpose-built aggregation for breakpoint analysis: catch per unit
 effort (CPUE), mean length, and mean hooks-between-floats, one row per
-(cluster, date). Not a general-purpose cluster summary -- see
-\code{\link[=summaryClusters]{summaryClusters()}} for per-cluster (not per-date) statistics, and note
-this does none of \code{summarizeClusterData()}'s (myLibrary.r) extra work:
-no lat/lon centroid, no fleet-movement distance.
+(cluster, date). Not a general-purpose cluster summary: see
+\code{\link[=summaryClusters]{summaryClusters()}} for per-cluster (not per-date) statistics.
 }
 \details{
 Imputed values are left out of the \code{mean_len} and \code{mean_hbf} series by
@@ -51,16 +49,16 @@ the \code{len_source} and \code{hbf_outlier} columns; if a column is absent, the
 corresponding variable is used as is.
 }
 \seealso{
-Other breakpoint analysis utilities:
-\code{\link[=ageFromLength]{ageFromLength()}},
+Other breakpoint analysis:
 \code{\link[=analyseBreakpoints]{analyseBreakpoints()}},
-\code{\link[=calculateClusterMovementBaseline]{calculateClusterMovementBaseline()}},
-\code{\link[=calculateDistance]{calculateDistance()}},
-\code{\link[=calculateFleetSpread]{calculateFleetSpread()}},
-\code{\link[=calculateSpatialOverlap]{calculateSpatialOverlap()}},
-\code{\link[=detectChangepoints]{detectChangepoints()}},
-\code{\link[=evaluateBreakpointMovement]{evaluateBreakpointMovement()}},
-\code{\link[=validateBreakpointAge]{validateBreakpointAge()}},
-\code{\link[=validateBreakpointSpatial]{validateBreakpointSpatial()}}
+\code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
+\code{\link[=breakpointContext]{breakpointContext()}},
+\code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
+\code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
+\code{\link[=plotBreakpoints]{plotBreakpoints()}},
+\code{\link[=plotInspection]{plotInspection()}},
+\code{\link[=rankBreakpoints]{rankBreakpoints()}},
+\code{\link[=spatialMonthTable]{spatialMonthTable()}},
+\code{\link[=vbAgeMonths]{vbAgeMonths()}}
 }
-\concept{breakpoint analysis utilities}
+\concept{breakpoint analysis}

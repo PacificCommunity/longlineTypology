@@ -22,8 +22,8 @@ clusterReport(
 )
 }
 \arguments{
-\item{diagnostics}{The diagnostics list saved by the clustering vignette,
-or the path to \code{cluster_diagnostics.RDS}.}
+\item{diagnostics}{The diagnostics list returned by \code{\link[=runClustering]{runClustering()}},
+or the path to the \code{cluster_diagnostics.RDS} file it saved.}
 
 \item{data}{\code{NULL} (default) to reload the data from
 \code{diagnostics$data_path}, or the data given to \code{\link[=runClustering]{runClustering()}} (data
@@ -95,7 +95,7 @@ seed \code{seed + K}, so both sections use the same rows.
 \dontrun{
 clusterReport("cluster_outputs/cluster_diagnostics.RDS",
               sections = c("pca", "gap", "varimp"),
-              output_file = "report_sp_hbf_latabs.pdf")
+              output_file = "cluster_report.pdf")
 }
 
 }

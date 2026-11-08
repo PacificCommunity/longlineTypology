@@ -27,7 +27,7 @@ the same scale as the fit rows, before projecting them with
 }
 \details{
 Zero-variance columns were stored by \code{\link[=pcaScale]{pcaScale()}} with \code{sd = 1}, so they
-are centred only, as in the original fit.
+are centred only, as in the fit.
 }
 \examples{
 fit <- data.frame(a = c(1, 2, 3), b = c(10, 20, 30))

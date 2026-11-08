@@ -2,30 +2,35 @@
 % Please edit documentation in R/breakpoints.R
 \name{plotBreakpoints}
 \alias{plotBreakpoints}
-\title{Overlay breakpoint analysis results on a time series plot}
+\title{Plot one series with the changes found by analyseBreakpoints()}
 \usage{
-plotBreakpoints(dates, x, bp_table, smooth_span = 0.2, y_lab = NULL)
+plotBreakpoints(dates, x, bp, y_lab = NULL)
 }
 \arguments{
-\item{dates}{Date vector for the series (same data passed to
-\code{\link[=analyseBreakpoints]{analyseBreakpoints()}}).}
+\item{dates, x}{The series.}
 
-\item{x}{Numeric vector, the plotted variable.}
+\item{bp}{Rows of \code{\link[=analyseBreakpoints]{analyseBreakpoints()}} / \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}}
+for this series (may be 0 rows).}
 
-\item{bp_table}{Data frame from \code{\link[=analyseBreakpoints]{analyseBreakpoints()}} (or \code{NULL}/0-row,
-plotted as a plain time series with no breakpoint lines).}
-
-\item{smooth_span}{LOESS span for the overlaid smoothed curve; should
-match what \code{\link[=detectChangepoints]{detectChangepoints()}} was called with. Default 0.2.}
-
-\item{y_lab}{Y-axis label. Default \code{NULL}.}
+\item{y_lab}{Y-axis label.}
 }
 \value{
-A ggplot2 object.
+A ggplot object.
 }
 \description{
-Draws the raw series, its LOESS-smoothed curve, and a vertical line at
-each candidate breakpoint (solid = valid, dashed = rejected), from the
-output of \code{\link[=analyseBreakpoints]{analyseBreakpoints()}}. No analysis is performed here.
+Plot one series with the changes found by analyseBreakpoints()
 }
-\concept{breakpoint plotting utilities}
+\seealso{
+Other breakpoint analysis:
+\code{\link[=aggregateClusterTimeSeries]{aggregateClusterTimeSeries()}},
+\code{\link[=analyseBreakpoints]{analyseBreakpoints()}},
+\code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}},
+\code{\link[=breakpointContext]{breakpointContext()}},
+\code{\link[=flagCommonBreaks]{flagCommonBreaks()}},
+\code{\link[=inspectBreakpoint]{inspectBreakpoint()}},
+\code{\link[=plotInspection]{plotInspection()}},
+\code{\link[=rankBreakpoints]{rankBreakpoints()}},
+\code{\link[=spatialMonthTable]{spatialMonthTable()}},
+\code{\link[=vbAgeMonths]{vbAgeMonths()}}
+}
+\concept{breakpoint analysis}

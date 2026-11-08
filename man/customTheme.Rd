@@ -16,11 +16,6 @@ A ggplot2 theme object.
 A clean \code{theme_bw()}-based theme with sensible defaults: legend at the
 bottom, wide legend keys, and blank facet strip backgrounds.
 }
-\details{
-Reused as-is from \code{seafisheries::customTheme()} (R/plotting.R) — copied
-here rather than taken as a dependency, since this package is meant to
-stand alone from \code{seafisheries}.
-}
 \examples{
 library(ggplot2)
 ggplot(mtcars, aes(wt, mpg)) +

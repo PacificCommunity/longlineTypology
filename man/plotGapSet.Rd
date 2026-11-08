@@ -7,8 +7,8 @@
 plotGapSet(gap_stat, SE.factor = 1, file = NULL)
 }
 \arguments{
-\item{gap_stat}{list of gap tables (the \code{gap_stat} list built by the
-clustering vignette); each element needs columns \code{gap} and \code{SE.sim}
+\item{gap_stat}{list of gap tables (e.g. \code{diagnostics$gap_stat} from
+\code{\link[=runClustering]{runClustering()}}); each element needs columns \code{gap} and \code{SE.sim}
 with rownames giving k.}
 
 \item{SE.factor}{as passed to cluster::maxSE(); 1 matches customKmeans().}
@@ -19,5 +19,8 @@ with rownames giving k.}
 invisibly, the selected k per replicate and their frequency table.
 }
 \description{
-Overlay the gap profiles from a set of replicates and show the selection rule
+Left panel: gap profile of each replicate, with the mean profile and mean
+standard error in red. Right panel: the Tibshirani (2001) SE-max criterion
+\code{Gap(k) - (Gap(k+1) - SE.factor * s(k+1))}; the selected k of each
+replicate is the first k where it is >= 0 (red dots).
 }

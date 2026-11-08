@@ -1,16 +1,17 @@
 #' Overlay the gap profiles from a set of replicates and show the selection rule
 #'
-#' @param gap_stat list of gap tables (the `gap_stat` list built by the
-#'   clustering vignette); each element needs columns `gap` and `SE.sim`
+#' Left panel: gap profile of each replicate, with the mean profile and mean
+#' standard error in red. Right panel: the Tibshirani (2001) SE-max criterion
+#' `Gap(k) - (Gap(k+1) - SE.factor * s(k+1))`; the selected k of each
+#' replicate is the first k where it is >= 0 (red dots).
+#'
+#' @param gap_stat list of gap tables (e.g. `diagnostics$gap_stat` from
+#'   [runClustering()]); each element needs columns `gap` and `SE.sim`
 #'   with rownames giving k.
 #' @param SE.factor as passed to cluster::maxSE(); 1 matches customKmeans().
 #' @param file optional png path; if NULL, draws to the current device.
 #' @return invisibly, the selected k per replicate and their frequency table.
 #' @export
-## ---- plotGapSet(): overlay the gap profiles and show the selection rule ----
-## gap_stat is the list built by the vignette loop; each element has columns
-## logW, E.logW, gap, SE.sim with rownames giving k. Base graphics only --
-## no continuous colour scale, so it is unaffected by the broken farver.
 plotGapSet <- function(gap_stat, SE.factor = 1, file = NULL) {
   if (!is.null(file)) grDevices::png(file, 1100, 520, res = 110)
   op <- graphics::par(mfrow = c(1, 2), mar = c(4.2, 4.2, 2.6, 1))

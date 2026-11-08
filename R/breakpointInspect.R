@@ -1,4 +1,4 @@
-## R/breakpointInspect.R -- zoom on one change of the breakpoint analysis v2.
+## R/breakpointInspect.R -- zoom on one change of the breakpoint analysis.
 ##
 ## For a change found by analyseClusterBreakpoints(), or for any date / date
 ## range given by hand, recompute every quantity the classification uses and
@@ -11,11 +11,11 @@
 ##   - per-flag shares and centroids before / after, mirror shares;
 ##   - context: other variables of the cluster, same variable in the other
 ##     clusters (common rule), EnvCpt model comparison.
-## Uses the same internals as analyseBreakpointsV2() (.bpPrepare,
+## Uses the same internals as analyseBreakpoints() (.bpPrepare,
 ## .bpTimescale, .bpCharacterise, .bpClassify, .bpSpatialTest,
 ## .bpSpatialLabel, .bpMirror), so a detected change is reproduced exactly.
 
-utils::globalVariables(c("date", "value", "fit", "d", "stat", "in_ci", "share", "when", "flag",
+utils::globalVariables(c("date", "what", "value", "fit", "d", "stat", "in_ci", "share", "when", "flag",
 						 "lon_before", "lat_before", "lon_after", "lat_after", "stat_name", "obs",
 						 "thr", "xmin", "xmax", "series", "y"))
 
@@ -28,7 +28,7 @@ utils::globalVariables(c("date", "value", "fit", "d", "stat", "in_ci", "share", 
 #' everything [inspectBreakpoint()] needs: the cluster series, the per-cluster
 #' spatial tables, the changes found and the settings used. Settings have
 #' the same names and defaults as in [analyseClusterBreakpoints()] and
-#' [analyseBreakpointsV2()].
+#' [analyseBreakpoints()].
 #'
 #' @param ts Output of [aggregateClusterTimeSeries()].
 #' @param df Row-level data (`cluster`, `date`, `longitude`, `latitude` and
@@ -38,9 +38,9 @@ utils::globalVariables(c("date", "value", "fit", "d", "stat", "in_ci", "share", 
 #' @param variables,group,hbf_abrupt_months,common_tol_months,common_min_share,mirror_min,spatial_window
 #'   As in [analyseClusterBreakpoints()].
 #' @param detector,detector_args,deseason,window,alpha,transient_tau_frac,spatial_alpha,Linf,K,t0
-#'   As in [analyseBreakpointsV2()].
+#'   As in [analyseBreakpoints()].
 #' @return A list of class `bpContext`.
-#' @family breakpoint analysis v2
+#' @family breakpoint analysis
 #' @export
 breakpointContext <- function(ts, df, bp = NULL, variables = c("CPUE", "mean_len", "mean_hbf"),
 							  group = "flag", hbf_abrupt_months = 12,
@@ -64,7 +64,7 @@ breakpointContext <- function(ts, df, bp = NULL, variables = c("CPUE", "mean_len
 										alpha = alpha, transient_tau_frac = transient_tau_frac,
 										spatial_alpha = spatial_alpha, Linf = Linf, K = K, t0 = t0)
 	if (!"cand_date" %in% names(bp))
-		stop("`bp` has no cand_date column: it was made with an older breakpointsV2.R. Leave bp = NULL.")
+		stop("`bp` has no cand_date column (made by an older version of the package). Leave bp = NULL.")
 	clusters <- sort(unique(ts$cluster))
 	tabs <- stats::setNames(lapply(clusters, function(cl) spatialMonthTable(df, cl, group = group)),
 							as.character(clusters))
@@ -80,7 +80,7 @@ breakpointContext <- function(ts, df, bp = NULL, variables = c("CPUE", "mean_len
 #'
 #' @param bp Output of [analyseClusterBreakpoints()].
 #' @return `bp` reordered, with a `priority` column (1 = most concerning).
-#' @family breakpoint analysis v2
+#' @family breakpoint analysis
 #' @export
 rankBreakpoints <- function(bp) {
 	if (!nrow(bp)) { bp$priority <- numeric(0); return(bp) }
@@ -168,7 +168,7 @@ rankBreakpoints <- function(bp) {
 #' @param spatial_windows Spatial windows (months) for the sensitivity table.
 #' @param envcpt Run EnvCpt on the series to report its model comparison.
 #' @return A list of class `bpInspection`; see [plotInspection()].
-#' @family breakpoint analysis v2
+#' @family breakpoint analysis
 #' @export
 inspectBreakpoint <- function(ctx, row = NULL, cluster = NULL, variable = NULL, at = NULL,
 							  spatial_windows = c(6, 12, 24), envcpt = TRUE) {
@@ -360,7 +360,7 @@ inspectBreakpoint <- function(ctx, row = NULL, cluster = NULL, variable = NULL, 
 #'   (duration profile against T_c), `null` (spatial null distributions),
 #'   `shares` (flag shares before / after), `centroids` (flag centroid
 #'   shifts) and `context` (all variables of the cluster around the change).
-#' @family breakpoint analysis v2
+#' @family breakpoint analysis
 #' @export
 plotInspection <- function(ins, ctx = NULL) {
 	stopifnot(inherits(ins, "bpInspection"))
