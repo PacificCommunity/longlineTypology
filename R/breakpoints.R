@@ -36,6 +36,11 @@ utils::globalVariables(c("x", "start_date", "end_plot", "lab"))
 
 .BP_ORIGIN <- as.Date("1900-01-15")
 
+## Colours of the labels in the breakpoint plots
+.BP_COLS <- c(unexplained = "#d7301f", abrupt = "#d7301f", switch = "#ae017e", composition = "#7a0177",
+			  relocation = "#2b8cbe", transient = "#41ab5d", gradual = "#969696",
+			  ambiguous = "#fdae61", common = "#000000")
+
 .bpMonthIdx <- function(d, origin = .BP_ORIGIN) {
 	d <- as.POSIXlt(d); o <- as.POSIXlt(origin)
 	(d$year - o$year) * 12 + (d$mon - o$mon) + 1
@@ -58,17 +63,18 @@ utils::globalVariables(c("x", "start_date", "end_plot", "lab"))
 
 # ---- input series ------------------------------------------------------------
 
-#' Aggregate fisheries data into per-(cluster, date) time series
+#' Aggregate fisheries data into monthly time series per cluster
 #'
 #' Minimal, purpose-built aggregation for breakpoint analysis: catch per unit
 #' effort (CPUE), mean length, and mean hooks-between-floats, one row per
-#' (cluster, date). Not a general-purpose cluster summary: see
-#' [summaryClusters()] for per-cluster (not per-date) statistics.
+#' cluster and calendar month. Rows with different dates in the same month
+#' are pooled. Not a general-purpose cluster summary: see
+#' [summaryClusters()] for per-cluster (not per-month) statistics.
 #'
 #' Imputed values are left out of the `mean_len` and `mean_hbf` series by
 #' default, whatever the clustering scenario: they are set to `NA` before
 #' averaging, so each monthly value rests on the remaining rows only. A
-#' (cluster, date) with no remaining row gets `NA`, which the breakpoint
+#' (cluster, month) with no remaining row gets `NA`, which the breakpoint
 #' analysis drops. CPUE is not affected. Rows are identified as imputed from
 #' the `len_source` and `hbf_outlier` columns; if a column is absent, the
 #' corresponding variable is used as is.
@@ -85,8 +91,9 @@ utils::globalVariables(c("x", "start_date", "end_plot", "lab"))
 #'   (non-imputed) HBF (default `"valid"`). Rows with any other value are
 #'   left out of `mean_hbf`.
 #'
-#' @return A data frame with one row per (cluster, date) present in `df`,
-#'   columns `cluster`, `date`, `CPUE`, `mean_len`, `mean_hbf`, and `n_len`,
+#' @return A data frame with one row per (cluster, month) present in `df`,
+#'   columns `cluster`, `date` (the earliest date of the month in `df`),
+#'   `CPUE`, `mean_len`, `mean_hbf`, and `n_len`,
 #'   `n_hbf` (number of rows behind each `mean_len` / `mean_hbf` value),
 #'   sorted by cluster then date.
 #'
@@ -94,10 +101,13 @@ utils::globalVariables(c("x", "start_date", "end_plot", "lab"))
 #' @export
 aggregateClusterTimeSeries <- function(df, use_imputed = FALSE,
 									   len_imputed = "imputed", hbf_valid = "valid") {
-	key   <- paste(as.character(df$cluster), format(df$ymd), sep = "\r")
+	## One group per cluster and calendar month; the breakpoint analysis
+	## indexes the series by month (.bpMonthIdx()).
+	key   <- paste(as.character(df$cluster), .bpMonthIdx(df$ymd), sep = "\r")
 	first <- !duplicated(key)
 	d_cluster <- df$cluster[first]
-	d_date    <- df$ymd[first]
+	d_date    <- as.Date(as.numeric(tapply(as.numeric(df$ymd), factor(key, unique(key)), min)),
+						 origin = "1970-01-01")
 
 	len <- df$mean_len
 	hbf <- df$mean_hbf
@@ -594,9 +604,7 @@ analyseClusterBreakpoints <- function(ts, df = NULL, variables = c("CPUE", "mean
 #' @family breakpoint analysis
 #' @export
 plotBreakpoints <- function(dates, x, bp, y_lab = NULL) {
-	cols <- c(unexplained = "#d7301f", abrupt = "#d7301f", switch = "#ae017e", composition = "#7a0177",
-			  relocation = "#2b8cbe", transient = "#41ab5d", gradual = "#969696",
-			  ambiguous = "#fdae61", common = "#000000")
+	cols <- .BP_COLS
 	p <- ggplot2::ggplot(data.frame(date = dates, x = x), ggplot2::aes(date, x)) +
 		ggplot2::geom_line(linewidth = 0.3)
 	if (!is.null(bp) && nrow(bp) > 0) {

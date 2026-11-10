@@ -102,7 +102,12 @@ cat("All years (", all_lab, "), including rows outside the fit years (", fit_lab
 ```
 
 ```{r, eval = "vardist" %in% sections}
-plotClusterVar(data, diagnostics$pca_select, cl_k, limits = var_limits)
+vd_plots <- plotClusterVar(data, diagnostics$pca_select, cl_k, limits = var_limits)
+```
+
+```{r, fig.height = 3.2, eval = "vardist" %in% sections}
+print(vd_plots$by_cluster)
+print(vd_plots$by_variable)
 ```
 
 ```{r, results = "asis", eval = "temporal" %in% sections}
@@ -121,4 +126,64 @@ print(knitr::kable(ts_k$summary, row.names = FALSE, digits = c(0, 3, 2, 0, 3),
 
 ```{r, fig.height = 4, eval = "temporal" %in% sections}
 plotTemporalShare(ts_k)
+```
+
+```{r, results = "asis", eval = "dominance" %in% sections}
+cat("\n\n## Spatial dominance\n\n")
+cat("Fit years (", fit_lab, "), weighted by effort. First map: cluster with the largest share ",
+	"of the effort in each ", dom_cell_size, "-degree cell. Second figure: share of the effort of each ",
+	map_cell_size, "-degree cell that belongs to each cluster (1: the cell is fished by that cluster only).\n\n",
+	sep = "")
+```
+
+```{r, fig.height = 4.5, eval = "dominance" %in% sections}
+plotDominance(data[fit_rows, , drop = FALSE], cl_fit, cell_size = dom_cell_size)
+```
+
+```{r, fig.height = 0.8 + 2.2 * ceiling(k_num / 2), eval = "dominance" %in% sections}
+plotClusterShare(data[fit_rows, , drop = FALSE], cl_fit, cell_size = map_cell_size)
+```
+
+```{r, results = "asis", eval = "maps" %in% sections}
+map_vars <- c(CPUE = "CPUE (yellowfin numbers / effort)", mean_len = "mean length",
+			  mean_hbf = "mean hooks between floats")
+map_groups <- split(seq_len(k_num), ceiling(seq_len(k_num) / map_per_fig))
+map_rows <- data[fit_rows, , drop = FALSE]
+for (v in names(map_vars)) {
+	cat("\n\n## Map of ", map_vars[[v]], "\n\n", sep = "")
+	cat("Fit years (", fit_lab, "), ", map_cell_size, "-degree cells. ",
+		switch(v, CPUE = "CPUE of a cell: total catch / total effort of its rows. ",
+			   mean_len = "Rows with imputed lengths left out; mean weighted by the number of fish. ",
+			   mean_hbf = "Rows with imputed HBF left out. "),
+		"Colour scale shared by all clusters, values outside it drawn at its ends. ",
+		"Above and right of each map: the same quantity by longitude and latitude band.\n\n", sep = "")
+	for (g in map_groups) {
+		h <- 0.8 + 3.6 * ceiling(length(g) / 2)
+		cat(knitr::knit_child(text = c(
+			sprintf("```{r, fig.height = %s}", h),
+			"plotClusterMap(map_rows, cl_fit, v, cell_size = map_cell_size, limits = map_limits[[v]], clusters = g)",
+			"```"), envir = environment(), quiet = TRUE), sep = "\n")
+	}
+}
+```
+
+```{r, results = "asis", eval = "breakpoints" %in% sections}
+cat("\n\n## Breakpoints\n\n")
+bpd_k <- breakpointData(diagnostics, k, data)
+bts_k <- aggregateClusterTimeSeries(bpd_k)
+bbp_k <- do.call(analyseClusterBreakpoints, c(list(ts = bts_k, df = bpd_k), breakpoint_args))
+cat("Monthly series of each cluster, fit years (", fit_lab, "), imputed lengths and HBF left out. ",
+	"Shaded: changes found by `analyseClusterBreakpoints()`, coloured by label (black: marked common). ",
+	nrow(bbp_k), " change(s) found. The plots and tables behind each change, and how to read them, ",
+	"are in `breakpointReport()`.\n\n", sep = "")
+if (nrow(bbp_k)) {
+	tab <- table(factor(bbp_k$cluster, sort(unique(bts_k$cluster))),
+				 ifelse(bbp_k$common, "common", bbp_k$label))
+	print(knitr::kable(cbind(cluster = rownames(tab), as.data.frame.matrix(tab)), row.names = FALSE,
+					   caption = "Changes per cluster and label"))
+}
+```
+
+```{r, fig.height = 1.2 + 1.1 * as.numeric(k), eval = "breakpoints" %in% sections}
+plotClusterBreakpoints(bts_k, bbp_k)
 ```

@@ -274,6 +274,8 @@ inspectBreakpoint <- function(ctx, row = NULL, cluster = NULL, variable = NULL, 
 			c(sprintf(">= %.1f cm", vbLen(ch$d_hi)), sprintf("%.1f to %.1f cm", vbLen(ch$d_lo), vbLen(ch$d_hi)),
 			  sprintf("< %.1f cm", vbLen(ch$d_lo))) else rep("fixed T_c", 3),
 		stringsAsFactors = FALSE)
+	## no ambiguous range when the plausible durations are a single value
+	if (ch$d_lo >= ch$d_hi) tc_bounds <- tc_bounds[tc_bounds$class != "ambiguous", , drop = FALSE]
 	transient_tc <- if (!is.na(ch$pulse_gain) && ch$pulse_gain > 0) ch$pulse_tau / s$transient_tau_frac else NA_real_
 
 	## ---- context ----
@@ -366,7 +368,12 @@ plotInspection <- function(ins, ctx = NULL) {
 	stopifnot(inherits(ins, "bpInspection"))
 	gg <- ggplot2::ggplot; a <- ggplot2::aes; th <- ggplot2::theme_bw(base_size = 9)
 	ch <- ins$char
-	y_lab <- if (ins$variable == "CPUE") "log CPUE (deseasoned)" else paste(ins$variable, "(deseasoned)")
+	## CPUE is analysed on the log scale; plotted back on the CPUE scale with a
+	## log axis, so values read directly and changes still read as factors.
+	is_cpue <- ins$variable == "CPUE"
+	tr <- if (is_cpue) exp else identity
+	y_scale <- if (is_cpue) ggplot2::scale_y_log10() else NULL
+	y_lab <- if (is_cpue) "CPUE (deseasoned, log axis)" else paste(ins$variable, "(deseasoned)")
 	sw <- ins$spatial$window
 	rects <- data.frame(xmin = c(ch$start_date, .bpIdxToDate(ch$s_hat - sw), .bpIdxToDate(ch$s_hat + ch$d_hat)),
 						xmax = c(ch$end_date, ch$start_date, .bpIdxToDate(ch$s_hat + ch$d_hat + sw)),
@@ -374,44 +381,62 @@ plotInspection <- function(ins, ctx = NULL) {
 	fills <- c(`transition (d_hat)` = "#fdae6b", `spatial: before` = "#c6dbef", `spatial: after` = "#6baed6")
 	## plausible end of the transition, start + [d_lo, d_hi]
 	d_rng <- data.frame(xmin = .bpIdxToDate(ch$s_hat + ch$d_lo), xmax = .bpIdxToDate(ch$s_hat + ch$d_hi),
-						y = max(ins$local$y, na.rm = TRUE))
+						y = tr(max(ins$local$y, na.rm = TRUE)))
 	win <- range(.bpIdxToDate(ins$local$t))
 
-	p_series <- gg(ins$series, a(date, y)) +
+	p_series <- gg(ins$series, a(date, tr(y))) + y_scale +
 		ggplot2::annotate("rect", xmin = win[1], xmax = win[2], ymin = -Inf, ymax = Inf, alpha = 0.12) +
 		ggplot2::geom_line(linewidth = 0.3) +
 		ggplot2::geom_vline(xintercept = ch$start_date, colour = "#e6550d") +
 		ggplot2::labs(x = NULL, y = y_lab, title = "Whole series (grey: local window)") + th
 
-	loc <- data.frame(date = .bpIdxToDate(ins$local$t), y = ins$local$y)
-	fits <- rbind(data.frame(date = loc$date, value = ins$local$fitted_null, fit = "no change"),
-				  data.frame(date = loc$date, value = ins$local$fitted_ramp, fit = "ramp"),
+	loc <- data.frame(date = .bpIdxToDate(ins$local$t), y = tr(ins$local$y))
+	fits <- rbind(data.frame(date = loc$date, value = tr(ins$local$fitted_null), fit = "no change"),
+				  data.frame(date = loc$date, value = tr(ins$local$fitted_ramp), fit = "ramp"),
 				  if (!is.null(ins$local$fitted_pulse))
-					  data.frame(date = loc$date, value = ins$local$fitted_pulse, fit = "pulse"))
-	p_local <- gg(loc, a(date, y)) +
+					  data.frame(date = loc$date, value = tr(ins$local$fitted_pulse), fit = "pulse"))
+	p_local <- gg(loc, a(date, y)) + y_scale +
 		ggplot2::geom_rect(data = rects, a(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = what),
 						   inherit.aes = FALSE, alpha = 0.3) +
 		ggplot2::geom_line(linewidth = 0.3, colour = "grey30") +
 		ggplot2::geom_line(data = fits, a(date, value, colour = fit), linewidth = 0.6) +
 		ggplot2::geom_vline(xintercept = ch$cand_date, linetype = "dotted") +
-		ggplot2::geom_segment(data = d_rng, a(x = xmin, xend = xmax, y = y, yend = y), inherit.aes = FALSE,
-							  linewidth = 1.2, colour = "#e6550d") +
+		## plausible end dates of the transition: start + [d_lo, d_hi] (a point
+		## when d_lo = d_hi)
+		ggplot2::geom_segment(data = d_rng, a(x = xmin, xend = xmax, y = y, yend = y,
+											  colour = "plausible end of the change"),
+							  inherit.aes = FALSE, linewidth = 1.2) +
+		ggplot2::geom_point(data = d_rng, a(x = xmin, y = y, colour = "plausible end of the change"),
+							inherit.aes = FALSE, size = 1.5, show.legend = FALSE) +
+		ggplot2::geom_point(data = d_rng, a(x = xmax, y = y, colour = "plausible end of the change"),
+							inherit.aes = FALSE, size = 1.5, show.legend = FALSE) +
 		ggplot2::scale_fill_manual(values = fills, breaks = names(fills), name = NULL) +
-		ggplot2::scale_colour_manual(values = c(`no change` = "grey50", ramp = "#d7301f", pulse = "#41ab5d"),
+		ggplot2::scale_colour_manual(values = c(`no change` = "grey50", ramp = "#d7301f", pulse = "#41ab5d",
+												`plausible end of the change` = "#e6550d"),
+									 breaks = c("no change", "ramp", "pulse", "plausible end of the change"),
 									 name = NULL) +
 		ggplot2::labs(x = NULL, y = y_lab, title = "Local fit") +
 		th + ggplot2::theme(legend.position = "bottom", legend.box = "vertical")
 
 	prof <- ins$profile[is.finite(ins$profile$stat), , drop = FALSE]
+	y_top <- max(c(prof$stat, ins$local$crit), na.rm = TRUE)
 	p_profile <- gg(prof, a(d, stat)) +
+		ggplot2::annotate("rect", xmin = ch$d_lo / 1.08, xmax = ch$d_hi * 1.08, ymin = -Inf, ymax = Inf,
+						  fill = "#d7301f", alpha = 0.08) +
 		ggplot2::geom_hline(yintercept = ins$local$crit, linetype = "dashed") +
 		ggplot2::geom_vline(xintercept = ch$T_c, colour = "#3182bd") +
+		ggplot2::annotate("text", x = ch$T_c, y = y_top, label = "faster than T_c ",
+						  hjust = 1, vjust = 1, size = 2.8, colour = "#3182bd") +
+		ggplot2::annotate("text", x = ch$T_c, y = y_top, label = " slower than T_c",
+						  hjust = 0, vjust = 1, size = 2.8, colour = "#3182bd") +
 		ggplot2::geom_line() + ggplot2::geom_point(a(colour = in_ci), size = 2) +
 		ggplot2::scale_colour_manual(values = c(`TRUE` = "#d7301f", `FALSE` = "grey60"),
-									 name = "in [d_lo, d_hi]") +
+									 labels = c(`TRUE` = "plausible duration", `FALSE` = "ruled out"),
+									 name = NULL) +
 		ggplot2::scale_x_log10(breaks = prof$d) +
-		ggplot2::labs(x = "transition duration d (months, log)", y = "LR against best ramp",
-					  title = sprintf("Duration profile (T_c = %.1f)", ch$T_c)) +
+		ggplot2::labs(x = "transition duration d (months, log scale)",
+					  y = "fit loss compared with the best duration",
+					  title = sprintf("Duration profile (T_c = %.1f months)", ch$T_c)) +
 		th + ggplot2::theme(legend.position = "bottom")
 
 	nl <- ins$spatial$null

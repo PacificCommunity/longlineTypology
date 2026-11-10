@@ -16,14 +16,17 @@ plotClusterVar(data, variables, cluster, limits = NULL)
 \item{limits}{Optional named list of \code{c(min, max)} per variable.}
 }
 \value{
-A ggplot object.
+A list of two ggplot objects: \code{by_cluster} (one panel per
+cluster) and \code{by_variable} (one panel per variable).
 }
 \description{
-Box plots (interquartile range and median) of each variable per cluster,
-with every variable rescaled to [0, 1] so they share one axis. By
-default a variable is rescaled over its range; \code{limits} sets another
-range for some variables (values outside are clamped), e.g. to stop a few
-extreme values from squashing the boxes.
+Box plots (interquartile range and median) of the clustering variables,
+with every variable rescaled to [0, 1] so they share one axis, in two
+arrangements: one panel per cluster (the profile of each cluster across
+the variables) and one panel per variable (how the clusters differ on
+it). By default a variable is rescaled over its range; \code{limits} sets
+another range for some variables (values outside are clamped), e.g. to
+stop a few extreme values from squashing the boxes.
 }
 \seealso{
 Other diagnostics:

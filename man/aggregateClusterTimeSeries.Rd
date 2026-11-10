@@ -2,7 +2,7 @@
 % Please edit documentation in R/breakpoints.R
 \name{aggregateClusterTimeSeries}
 \alias{aggregateClusterTimeSeries}
-\title{Aggregate fisheries data into per-(cluster, date) time series}
+\title{Aggregate fisheries data into monthly time series per cluster}
 \usage{
 aggregateClusterTimeSeries(
   df,
@@ -28,22 +28,24 @@ kept.}
 left out of \code{mean_hbf}.}
 }
 \value{
-A data frame with one row per (cluster, date) present in \code{df},
-columns \code{cluster}, \code{date}, \code{CPUE}, \code{mean_len}, \code{mean_hbf}, and \code{n_len},
+A data frame with one row per (cluster, month) present in \code{df},
+columns \code{cluster}, \code{date} (the earliest date of the month in \code{df}),
+\code{CPUE}, \code{mean_len}, \code{mean_hbf}, and \code{n_len},
 \code{n_hbf} (number of rows behind each \code{mean_len} / \code{mean_hbf} value),
 sorted by cluster then date.
 }
 \description{
 Minimal, purpose-built aggregation for breakpoint analysis: catch per unit
 effort (CPUE), mean length, and mean hooks-between-floats, one row per
-(cluster, date). Not a general-purpose cluster summary: see
-\code{\link[=summaryClusters]{summaryClusters()}} for per-cluster (not per-date) statistics.
+cluster and calendar month. Rows with different dates in the same month
+are pooled. Not a general-purpose cluster summary: see
+\code{\link[=summaryClusters]{summaryClusters()}} for per-cluster (not per-month) statistics.
 }
 \details{
 Imputed values are left out of the \code{mean_len} and \code{mean_hbf} series by
 default, whatever the clustering scenario: they are set to \code{NA} before
 averaging, so each monthly value rests on the remaining rows only. A
-(cluster, date) with no remaining row gets \code{NA}, which the breakpoint
+(cluster, month) with no remaining row gets \code{NA}, which the breakpoint
 analysis drops. CPUE is not affected. Rows are identified as imputed from
 the \code{len_source} and \code{hbf_outlier} columns; if a column is absent, the
 corresponding variable is used as is.

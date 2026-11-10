@@ -372,6 +372,7 @@ plotVarImportance <- function(vi, metrics = unique(vi$metric), variable_order = 
 	stats::setNames(lapply(metrics, function(mt) {
 		ggplot(vi[vi$metric == mt, , drop = FALSE], aes(cluster, variable, fill = m)) +
 			geom_tile() +
+			ggplot2::scale_fill_viridis_c() +
 			labs(x = "Cluster", y = NULL, fill = "Importance", title = mt) +
 			theme_bw() +
 			theme(legend.position = "bottom", legend.direction = "horizontal")
@@ -383,21 +384,24 @@ plotVarImportance <- function(vi, metrics = unique(vi$metric), variable_order = 
 
 #' Distribution of the clustering variables by cluster
 #'
-#' Box plots (interquartile range and median) of each variable per cluster,
-#' with every variable rescaled to \[0, 1\] so they share one axis. By
-#' default a variable is rescaled over its range; `limits` sets another
-#' range for some variables (values outside are clamped), e.g. to stop a few
-#' extreme values from squashing the boxes.
+#' Box plots (interquartile range and median) of the clustering variables,
+#' with every variable rescaled to \[0, 1\] so they share one axis, in two
+#' arrangements: one panel per cluster (the profile of each cluster across
+#' the variables) and one panel per variable (how the clusters differ on
+#' it). By default a variable is rescaled over its range; `limits` sets
+#' another range for some variables (values outside are clamped), e.g. to
+#' stop a few extreme values from squashing the boxes.
 #'
 #' @param data A dataframe with the variables.
 #' @param variables Names of the variables (e.g. `diagnostics$pca_select`).
 #' @param cluster Cluster label of each row of `data`.
 #' @param limits Optional named list of `c(min, max)` per variable.
 #'
-#' @return A ggplot object.
+#' @return A list of two ggplot objects: `by_cluster` (one panel per
+#'   cluster) and `by_variable` (one panel per variable).
 #'
 #' @family diagnostics
-#' @importFrom ggplot2 ggplot aes geom_boxplot labs scale_y_continuous guides guide_legend
+#' @importFrom ggplot2 ggplot aes geom_boxplot labs scale_y_continuous facet_wrap scale_fill_manual theme element_text element_blank
 #' @export
 plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 	if (length(cluster) != nrow(data))
@@ -413,13 +417,25 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 		data.frame(cluster = cluster, variable = v, value = x)
 	}))
 	long$variable <- factor(long$variable, levels = variables)
-
-	ggplot(long, aes(x = factor(cluster), y = value, fill = variable)) +
-		geom_boxplot(outlier.shape = NA, coef = 0) +
-		labs(x = "Cluster", y = "Scaled value", fill = NULL) +
-		scale_y_continuous(limits = c(0, 1)) +
-		customTheme() +
-		guides(fill = guide_legend(nrow = 3))
+	long$cluster  <- factor(long$cluster, levels = sort(unique(long$cluster)))
+	## one colour per variable, from the cluster palette
+	var_cols <- stats::setNames(clusterColours(length(variables)), variables)
+	th <- customTheme() + theme(legend.position = "none", panel.border = element_blank(),
+								strip.background = element_blank(),
+								axis.text.x = element_text(angle = 45, hjust = 1))
+	list(
+		by_cluster = ggplot(long, aes(variable, value, fill = variable)) +
+			geom_boxplot(outlier.shape = NA, coef = 0) +
+			scale_fill_manual(values = var_cols) +
+			scale_y_continuous(limits = c(0, 1)) +
+			facet_wrap(~ cluster, nrow = 1, labeller = function(l) list(paste("cluster", l$cluster))) +
+			labs(x = NULL, y = "Scaled value") + th,
+		by_variable = ggplot(long, aes(cluster, value, fill = variable)) +
+			geom_boxplot(outlier.shape = NA, coef = 0) +
+			scale_fill_manual(values = var_cols) +
+			scale_y_continuous(limits = c(0, 1)) +
+			facet_wrap(~ variable, nrow = 1) +
+			labs(x = "Cluster", y = "Scaled value") + th)
 }
 
 
@@ -451,6 +467,16 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 #'     cluster, all rows ([plotClusterVar()]).}
 #'   \item{`"temporal"`}{per K, each cluster's share of each year's rows,
 #'     fit years ([temporalStability()]).}
+#'   \item{`"dominance"`}{per K, dominant cluster per cell
+#'     ([plotDominance()]) and share of each cluster per cell
+#'     ([plotClusterShare()]), in effort, fit years.}
+#'   \item{`"maps"`}{per K, maps of CPUE, mean length and mean HBF per
+#'     cluster with longitude and latitude profiles ([plotClusterMap()]),
+#'     fit years.}
+#'   \item{`"breakpoints"`}{per K, the monthly series of every cluster with
+#'     the changes found by [analyseClusterBreakpoints()], fit years
+#'     ([plotClusterBreakpoints()]). Details of each change are in
+#'     [breakpointReport()].}
 #' }
 #'
 #' The subsamples of the silhouette and the variable importance are drawn
@@ -474,6 +500,15 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 #'   (slow: `n_null` kmeans fits per K). Default `FALSE`.
 #' @param n_null Number of null datasets when `null_silhouette = TRUE`.
 #' @param share_threshold Passed to [temporalStability()] as `threshold`.
+#' @param dom_cell_size,map_cell_size Cell sizes (degrees) of the dominance
+#'   map and of the share and variable maps.
+#' @param map_limits Optional named list of colour limits `c(min, max)` for
+#'   the variable maps (`CPUE`, `mean_len`, `mean_hbf`); default: 2nd and
+#'   98th percentiles of the cells.
+#' @param map_per_fig Clusters per map figure (the maps of more clusters are
+#'   split over several figures sharing one colour scale).
+#' @param breakpoint_args List of settings passed to
+#'   [analyseClusterBreakpoints()] for the `"breakpoints"` section.
 #' @param var_limits Passed to [plotClusterVar()] as `limits`.
 #' @param title Title of the report.
 #' @param quiet Passed to [rmarkdown::render()].
@@ -491,16 +526,19 @@ plotClusterVar <- function(data, variables, cluster, limits = NULL) {
 #' @export
 clusterReport <- function(diagnostics, data = NULL,
 						  sections = c("pca", "gap", "centroids", "jaccard", "silhouette",
-									   "varimp", "vardist", "temporal"),
+									   "varimp", "vardist", "temporal", "dominance", "maps",
+									   "breakpoints"),
 						  k = NULL, output_file = "cluster_report.pdf",
 						  subsample_size = 3000, seed = 123,
-						  null_silhouette = FALSE, n_null = 100, share_threshold = 0.01,
+						  null_silhouette = FALSE, n_null = 100, share_threshold = 0.01, breakpoint_args = list(),
+						  dom_cell_size = 5, map_cell_size = 1, map_limits = NULL, map_per_fig = 6,
 						  var_limits = NULL, title = "Clustering diagnostics report",
 						  quiet = TRUE) {
 	if (!requireNamespace("rmarkdown", quietly = TRUE))
 		stop("clusterReport() needs the 'rmarkdown' package.")
 	sections <- match.arg(sections, c("pca", "gap", "centroids", "jaccard", "silhouette",
-									  "varimp", "vardist", "temporal"), several.ok = TRUE)
+									  "varimp", "vardist", "temporal", "dominance", "maps",
+									  "breakpoints"), several.ok = TRUE)
 	if ("varimp" %in% sections && !requireNamespace("randomForest", quietly = TRUE))
 		stop("The 'varimp' section needs the 'randomForest' package.")
 
@@ -519,33 +557,10 @@ clusterReport <- function(diagnostics, data = NULL,
 	scores   <- pcaScores(diagnostics, data)
 	fit_rows <- fitRows(diagnostics, data)
 
-	template <- system.file("reports", "cluster_report.Rmd", package = "longlineTypology")
-	if (template == "") stop("Report template not found in the installed package.")
-	## Rendered from a temporary copy: the installed package may not be writable.
-	work <- tempfile("cluster_report_")
-	dir.create(work)
-	file.copy(list.files(dirname(template), full.names = TRUE), work)
-
-	env <- new.env(parent = globalenv())
-	env$diagnostics  <- diagnostics
-	env$data         <- data
-	env$scores       <- scores
-	env$fit_rows     <- fit_rows
-	env$sections     <- sections
-	env$ks           <- ks
-	env$subsample_size  <- subsample_size
-	env$seed            <- seed
-	env$null_silhouette <- null_silhouette
-	env$n_null          <- n_null
-	env$share_threshold <- share_threshold
-	env$var_limits      <- var_limits
-
-	output_file <- normalizePath(output_file, mustWork = FALSE)
-	out <- rmarkdown::render(file.path(work, "cluster_report.Rmd"),
-							 output_file = basename(output_file),
-							 output_dir = dirname(output_file),
-							 intermediates_dir = work,
-							 params = list(title = title),
-							 envir = env, quiet = quiet)
-	invisible(out)
+	.renderReport("cluster_report.Rmd", output_file, title, quiet, list(
+		diagnostics = diagnostics, data = data, scores = scores, fit_rows = fit_rows,
+		sections = sections, ks = ks, subsample_size = subsample_size, seed = seed,
+		null_silhouette = null_silhouette, n_null = n_null, share_threshold = share_threshold,
+		var_limits = var_limits, breakpoint_args = breakpoint_args, dom_cell_size = dom_cell_size,
+		map_cell_size = map_cell_size, map_limits = map_limits, map_per_fig = map_per_fig))
 }

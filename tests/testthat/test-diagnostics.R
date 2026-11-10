@@ -1,6 +1,6 @@
 ## Small clustering of the mock data (few replicates, small samples).
 mockDiagnostics <- function() {
-	mock <- system.file("extdata", "mockdata", "LL_mock.RDS", package = "longlineTypology")
+	mock <- mockPath()
 	diag <- runClustering(mock, "sp_hbf_latabs", sample_no = 100, kmeans_set = 3,
 						  max_k = 8, B = 10, nstart = 5, verbose = FALSE)
 	list(diagnostics = diag, data = clusterData(diag))
@@ -77,8 +77,11 @@ test_that("plotClusterVar rescales to [0, 1] with optional limits", {
 	cl <- clusterLabels(m$diagnostics, names(m$diagnostics$kmeans_full)[1])
 	p  <- plotClusterVar(m$data, m$diagnostics$pca_select, cl,
 						 limits = list(mean_hbf = c(5, 15)))
-	expect_s3_class(p, "ggplot")
-	expect_true(all(p$data$value >= 0 & p$data$value <= 1, na.rm = TRUE))
+	expect_named(p, c("by_cluster", "by_variable"))
+	expect_s3_class(p$by_cluster, "ggplot")
+	expect_s3_class(p$by_variable, "ggplot")
+	expect_true(all(p$by_cluster$data$value >= 0 & p$by_cluster$data$value <= 1, na.rm = TRUE))
+	expect_error(plotClusterVar(m$data, "nope", cl), "missing")
 })
 
 test_that("clusterReport renders a PDF from the diagnostics alone", {
@@ -94,7 +97,7 @@ test_that("clusterReport renders a PDF from the diagnostics alone", {
 })
 
 test_that("runClustering stores the data source and restores the RNG", {
-	mock <- system.file("extdata", "mockdata", "LL_mock.RDS", package = "longlineTypology")
+	mock <- mockPath()
 	set.seed(3); a <- runif(1)
 	set.seed(3)
 	d <- runClustering(mock, "sp_hbf_latabs", sample_no = 50, kmeans_set = 2, max_k = 5,
@@ -113,7 +116,7 @@ test_that("runClustering stores the data source and restores the RNG", {
 })
 
 test_that("prepareClusterData is idempotent", {
-	mock <- readRDS(system.file("extdata", "mockdata", "LL_mock.RDS", package = "longlineTypology"))
+	mock <- mockLonglineData()
 	once <- prepareClusterData(mock, "sp_hbf_latabs")
 	expect_identical(prepareClusterData(once, "sp_hbf_latabs"), once)
 	expect_true(all(once$hbf_outlier == "valid"))

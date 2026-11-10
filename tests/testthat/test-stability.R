@@ -1,6 +1,6 @@
 ## Small clustering of the mock data, shared by the tests of this file.
 mock_run <- local({
-	mock <- system.file("extdata", "mockdata", "LL_mock.RDS", package = "longlineTypology")
+	mock <- mockPath()
 	diag <- runClustering(mock, "sp_hbf_latabs", sample_no = 100, kmeans_set = 4,
 						  max_k = 8, B = 10, nstart = 5, verbose = FALSE)
 	dat  <- clusterData(diag)

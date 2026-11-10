@@ -1,0 +1,216 @@
+
+## `r card_title`
+
+```{r, results = "asis"}
+## Objects from the calling chunk: ins, card_title, bp_data, ctx, detail, top_n
+ch <- ins$char
+mo <- function(n) sprintf("%g month%s", n, if (n == 1) "" else "s")
+size <- if (ins$variable == "CPUE") sprintf("CPUE x %.2f (%+.0f %%)", exp(ch$delta), 100 * ch$delta_rel) else
+	sprintf("%+.2f (%+.1f %% of the level of the year before)", ch$delta, 100 * ch$delta_rel)
+if (ins$mode == "manual") {
+	say("*Manual inspection.* ", if (is.null(ins$scan))
+		sprintf("Fit centred on %s.", fmtDate(ch$cand_date)) else
+		sprintf("Range %s to %s: %d centres tried, the one with the strongest change (%s) is shown; its p-value is the best of %d tests.",
+				fmtDate(min(ins$at)), fmtDate(max(ins$at)), nrow(ins$scan), fmtDate(ch$cand_date), nrow(ins$scan)),
+		" The label is the one the rules would give. ",
+		if (nrow(ins$context$nearest_detected))
+			sprintf("Nearest change found in this series: %s (%s).",
+					fmtDate(ins$context$nearest_detected$start_date), ins$context$nearest_detected$label)
+		else "No change found in this series.")
+}
+say("**Label: ", ins$label, if (ins$common) " (common)", "**",
+	if (!ch$local_test_pass) sprintf(" (local test not passed: p = %.3f)", ch$p_nominal), ". ",
+	"Transition ", fmtDate(ch$start_date), " to ", fmtDate(ch$end_date), " (d_hat = ", mo(ch$d_hat),
+	if (ch$d_lo < ch$d_hi) paste0(", plausible ", ch$d_lo, " to ", ch$d_hi, " months") else "", "). T~c~ = ", sprintf("%.1f", ch$T_c), " months",
+	if (ins$hbf_fixed) " (fixed for HBF)" else sprintf(" (mean length %.1f cm)", ins$len_local),
+	". Size: ", size, ".")
+pl <- plotInspection(ins, ctx)
+win <- breakpointWindows(bp_data, ins)
+```
+
+### A. The change
+
+```{r, fig.height = 2.4}
+pl$series
+```
+
+### B. Data behind the change
+
+```{r, results = "asis"}
+pm <- win$per_month
+print(kab(pm, col.names = c("window", "rows", "rows with value", "months", "min / month",
+							"median / month", "max / month", "empty months")))
+end_c <- max(ctx$ts$date[ctx$ts$cluster == ins$cluster])
+after_end <- longlineTypology:::.bpIdxToDate(ch$s_hat + ch$d_hat + ins$settings$spatial_window - 1)
+say("The series of cluster ", ins$cluster, " ends ", fmtDate(end_c), "; the window after the change ends ",
+	fmtDate(after_end), if (after_end > end_c) " (beyond the end of the series)." else ".")
+say("*Use:* few rows per month or empty months make the monthly values noisy; a window beyond the end of the series weakens the tests of block D.")
+```
+
+### C. Timing
+
+```{r, results = "asis"}
+## Size before / after on the deseasoned scale (geometric mean for CPUE): the ramp
+## coefficient is fitted together with a linear trend over the whole
+## window, so it can differ from the plain before / after difference.
+loc <- ins$local
+w_  <- ins$settings$spatial_window
+yb  <- mean(loc$y[loc$t >= ch$s_hat - w_ & loc$t < ch$s_hat])
+ya  <- mean(loc$y[loc$t >= ch$s_hat + ch$d_hat & loc$t < ch$s_hat + ch$d_hat + w_])
+if (ins$variable == "CPUE") {
+	say(sprintf("Deseasoned CPUE (geometric mean) of the %d months before %.3f, of the %d months after %.3f: x %.2f. The size above (x %.2f) is the ramp of the local fit, fitted together with a linear trend of %+.1f %% per month over the window, so it can differ from the plain before / after ratio.",
+				w_, exp(yb), w_, exp(ya), exp(ya - yb), exp(ch$delta), 100 * (exp(unname(loc$fit_null[2])) - 1)))
+} else {
+	say(sprintf("Deseasoned mean of the %d months before %.2f, of the %d months after %.2f: difference %+.2f. The size above (%+.2f) is the ramp of the local fit, fitted together with a linear trend of %+.3f per month over the window, so it can differ from the plain before / after difference.",
+				w_, yb, w_, ya, ya - yb, ch$delta, unname(loc$fit_null[2])))
+}
+```
+
+```{r, fig.height = 3.6}
+pl$local
+```
+
+```{r, fig.height = 2.8}
+pl$profile
+```
+
+```{r, results = "asis"}
+## Values of T_c (and of the mean length that sets it) at which the class changes
+vbL <- function(a) with(ins$settings, Linf * (1 - exp(-K * (a / 12 - t0))))
+lenTxt <- function(fmt, a) if (ins$hbf_fixed) "" else sprintf(fmt, vbL(a))
+say(if (ins$hbf_fixed) sprintf("T~c~ is fixed at %g months for HBF. ", ch$T_c) else
+		sprintf("T~c~ = %.1f months is the age at the median mean length near the change (%.1f cm). ",
+				ch$T_c, ins$len_local),
+	if (ch$d_lo < ch$d_hi) sprintf("The plausible durations are %g to %g months. ", ch$d_lo, ch$d_hi) else
+		sprintf("The only plausible duration is %s. ", mo(ch$d_lo)),
+	sprintf("The change would be abrupt for any T~c~ of at least %s%s, ", mo(ch$d_hi),
+			lenTxt(" (mean length of at least %.1f cm)", ch$d_hi)),
+	sprintf("gradual only for T~c~ below %s%s", mo(ch$d_lo), lenTxt(" (below %.1f cm)", ch$d_lo)),
+	if (ch$d_lo < ch$d_hi) ", and ambiguous in between." else ".")
+if (!is.na(ins$transient_tc))
+	say(sprintf("The pulse fits better than the lasting change (decay time %g months): the change would be transient for T~c~ of at least %.0f months.",
+				ch$pulse_tau, ins$transient_tc))
+```
+
+### D. Fleet: flag mix and positions
+
+```{r, results = "asis"}
+sp <- ins$spatial
+spatial_used <- ch$class %in% c("abrupt", "ambiguous")
+if (!spatial_used)
+	say("These tests only apply to abrupt or ambiguous changes: for this ", ch$class,
+		" change they do not decide the label and are shown for information.")
+say(sprintf("Windows: %d months before the start and %d months after the end. comp_change = %.3f (p = %s); reloc_km = %s (p = %s); %d positions in the cluster's history.",
+			sp$window, sp$window, sp$comp_change, formatC(sp$p_comp, digits = 3, format = "f"),
+			formatC(sp$reloc_km, digits = 0, format = "f"), formatC(sp$p_reloc, digits = 3, format = "f"),
+			nrow(sp$null)),
+	if (is.na(sp$comp_threshold)) " The history is too short for any value to reach the significance level." else "")
+```
+
+```{r, fig.height = min(7, 1 + 0.17 * nrow(ins$flags))}
+pl$shares
+```
+
+```{r, fig.height = 3.5, eval = !is.null(pl$centroids)}
+pl$centroids
+```
+
+```{r, fig.height = 2.4, eval = !is.null(pl$null)}
+pl$null
+```
+
+```{r, results = "asis", eval = !is.null(pl$null)}
+say("*Null distributions.* Bars: comp_change and reloc_km at every position of the cluster's history (same windows, slid every 3 months). Red: this change. Dashed: the value to exceed for p < ",
+	ins$settings$spatial_alpha, ".")
+```
+
+```{r, results = "asis", eval = spatial_used}
+## Robustness of the flag-mix and position tests to the duration and the window
+base <- ins$sens_window$label[ins$sens_window$window == ins$settings$spatial_window]
+rob <- rbind(data.frame(setting = sprintf("duration %g months", ins$sens_d$d),
+						p_comp = ins$sens_d$p_comp, p_reloc = ins$sens_d$p_reloc, result = ins$sens_d$label),
+			 data.frame(setting = sprintf("window %g months", ins$sens_window$window),
+			 		   p_comp = ins$sens_window$p_comp, p_reloc = ins$sens_window$p_reloc,
+			 		   result = ins$sens_window$label))
+if (length(base) && all(rob$result == base)) {
+	say(sprintf("**Robustness.** The flag-mix and position tests give the same result (`%s`) for %s and for windows of %s months.",
+				base, if (nrow(ins$sens_d) == 1) "the only plausible duration" else
+					sprintf("each of the %d plausible durations", nrow(ins$sens_d)),
+				paste(ins$sens_window$window, collapse = ", ")))
+} else {
+	say("**Robustness.** The result of the flag-mix and position tests changes with the duration or the window:")
+	print(kab(rob, digits = c(0, 3, 3, 0), col.names = c("setting", "p comp", "p reloc", "result"),
+			  caption = "Flag-mix and position tests repeated for each plausible duration and for other window lengths."))
+	say("*Use:* where the result differs from the one used for the label (duration d_hat, window ",
+		ins$settings$spatial_window, " months), the label depends on these choices.")
+}
+```
+
+### E. Rows moving between clusters
+
+```{r, results = "asis"}
+if (is.null(ins$mirror$all)) {
+	say("No flag changed its number of rows in this cluster: no mirror computed.")
+} else {
+	fdl <- ins$mirror$flag_deltas
+	this <- fdl[, as.character(ins$cluster)]
+	tot <- sum(abs(this))
+	matched <- vapply(names(ins$mirror$all), function(o) {
+		other <- fdl[, o]
+		sum(pmin(pmax(this, 0), pmax(-other, 0)) + pmin(pmax(-this, 0), pmax(other, 0)))
+	}, numeric(1))
+	best <- names(ins$mirror$all)[which.max(ins$mirror$all)]
+	say(sprintf("Between the windows before and after, cluster %s gained or lost %d rows in total, summed over flags (gains and losses together). For each other cluster, *rows matched* counts those that the other cluster lost or gained for the same flags at the same time (the smaller of the two, flag by flag): rows that moved between the two clusters. The *share matched* is rows matched / %d: for cluster %s, %.0f of the %d rows (%.2f).",
+				ins$cluster, round(tot), round(tot), best, matched[[best]], round(tot), ins$mirror$all[[best]]))
+	print(kab(data.frame(cluster = names(ins$mirror$all), rows_matched = round(matched),
+						 share = unname(ins$mirror$all)),
+			  digits = c(0, 0, 2), col.names = c("cluster", "rows matched", "share matched"),
+			  caption = sprintf("Rows of cluster %s's per-flag change matched by the opposite change in each other cluster.",
+			  				  ins$cluster)))
+	cat("\n\n")
+	fd <- head(fdl, top_n)
+	print(kab(data.frame(flag = rownames(fd), fd, check.names = FALSE),
+			  caption = sprintf("Rows after minus rows before, per flag and cluster (column %s: this cluster; %d flags with the largest change here).",
+			  				  ins$cluster, nrow(fd))))
+	say("*Use:* the share matched decides `switch` for a composition change (at least ", ins$settings$mirror_min,
+		"); for other labels it is shown for information. It is a share of the change of this cluster, not of the cluster's rows. The second table shows which flags gained or lost rows in which cluster.")
+}
+```
+
+### F. Other clusters at the same time
+
+```{r, results = "asis"}
+print(kab(changeAcrossClusters(bp_data, ins), digits = c(0, 0, 0, 3, 3, 3, 3),
+		  caption = sprintf("%s before and after, same windows, every cluster and all pooled.", ins$variable)))
+cat("\n\n")
+so <- ins$context$same_variable
+say(sprintf("%d of %d clusters change %s within %d months of the start (%d needed for common).",
+			ins$context$n_common, length(ctx$clusters), ins$variable, ins$settings$common_tol_months,
+			ins$context$need))
+if (nrow(so)) print(kab(data.frame(cluster = so$cluster, start = fmtDate(so$start_date), d_hat = so$d_hat,
+								   label = lab_or_common(so)),
+						caption = sprintf("Changes in %s in the other clusters within 24 months.", ins$variable)))
+say("*Use:* the count decides `common`. The first table shows whether the other clusters moved over the same windows, even where no change was detected.")
+```
+
+```{r, fig.height = 4, eval = !is.null(pl$context)}
+pl$context
+```
+
+### G. How the label was assigned
+
+```{r, results = "asis"}
+r <- ins$rules
+r$met <- ifelse(r$met, "yes", "no")
+print(kab(r, col.names = c("step", "statistic", "value", "condition", "met")))
+say("Steps apply in order: transient, then abrupt / gradual / ambiguous; composition and relocation only for abrupt or ambiguous changes; switch only for composition changes; common for all but switch.")
+if (detail && !is.null(ins$envcpt) && "AIC" %in% names(ins$envcpt)) {
+	e <- ins$envcpt
+	e$nearest_cpt <- fmtDate(e$nearest_cpt)
+	print(kab(e, digits = c(0, 1, 1, 0, 0),
+			  col.names = c("EnvCpt model", "AIC", "dAIC", "change points", "nearest to centre"),
+			  caption = "EnvCpt on the whole series: only the best model's change points become candidates."))
+}
+```
+
+\newpage

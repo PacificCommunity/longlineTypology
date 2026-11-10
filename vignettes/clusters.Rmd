@@ -10,7 +10,7 @@ editor_options:
 params:
   scenario: "sp_hbf_latabs"
   outdir: ""      # "" = a temporary directory; set a path to keep the outputs
-  data_path: ""   # "" = bundled mock data; set the path to a seafisheries RDS
+  data_path: ""   # "" = mock data from mockLonglineData(); set the path to a seafisheries RDS
   n_pc: 0         # 0 = use pca_method; integer >= 2 overrides the number of PCs kept
 ---
 
@@ -33,7 +33,7 @@ stat_list <- list()
 ```
 
 This document demonstrates clustering of operational longline data to identify
-fishing typologies. By default it runs on a small bundled mock dataset; for a
+fishing typologies. By default it runs on a small simulated dataset (`mockLonglineData()`); for a
 real analysis, point `data_path` to the output of the `seafisheries`
 processing pipeline (same format), e.g.
 
@@ -60,18 +60,13 @@ Summary:
 # Load dataset
 
 ```{r load_dataset}
-if (data_path == "") {
-	data_path <- system.file("extdata", "mockdata", "LL_mock.RDS",
-							 package = "longlineTypology")
-}
-
-EC_clean <- readRDS(data_path)
+EC_clean <- if (data_path == "") mockLonglineData() else readRDS(data_path)
 stat_list$nrow_total <- nrow(EC_clean)
 ```
 
 The mock data are simulated from four fishing strategies with distinct species composition,
 latitude band, hooks between floats and fish length, so the clustering has
-structure to find. They span 1960 to 2023 and follow the `seafisheries` output
+structure to find. They span 1985 to 2022 and follow the `seafisheries` output
 format.
 
 # Define clustering parameters

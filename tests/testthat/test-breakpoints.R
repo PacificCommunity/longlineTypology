@@ -179,6 +179,19 @@ test_that("aggregateClusterTimeSeries() aggregates CPUE/mean_len/mean_hbf correc
 })
 
 
+test_that("aggregateClusterTimeSeries() pools the dates of a month", {
+	df <- data.frame(cluster = 1,
+					 ymd = as.Date(c("2000-01-03", "2000-01-20", "2000-02-15", "2000-02-15")),
+					 yft_n = c(10, 30, 5, 5), E = c(10, 10, 10, 10),
+					 mean_len = c(100, 110, 120, 130), mean_hbf = c(10, 20, 30, 40))
+	out <- aggregateClusterTimeSeries(df)
+	expect_equal(nrow(out), 2)
+	expect_equal(out$date, as.Date(c("2000-01-03", "2000-02-15")))   # earliest date of the month
+	expect_equal(out$CPUE, c(2, 0.5))
+	expect_equal(out$mean_len, c(105, 125))
+	expect_equal(out$n_len, c(2, 2))
+})
+
 test_that("aggregateClusterTimeSeries() leaves imputed length and HBF out unless asked", {
 	df <- data.frame(
 		cluster     = 1,

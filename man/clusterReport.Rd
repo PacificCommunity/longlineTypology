@@ -8,7 +8,7 @@ clusterReport(
   diagnostics,
   data = NULL,
   sections = c("pca", "gap", "centroids", "jaccard", "silhouette", "varimp", "vardist",
-    "temporal"),
+    "temporal", "dominance", "maps", "breakpoints"),
   k = NULL,
   output_file = "cluster_report.pdf",
   subsample_size = 3000,
@@ -16,6 +16,11 @@ clusterReport(
   null_silhouette = FALSE,
   n_null = 100,
   share_threshold = 0.01,
+  breakpoint_args = list(),
+  dom_cell_size = 5,
+  map_cell_size = 1,
+  map_limits = NULL,
+  map_per_fig = 6,
   var_limits = NULL,
   title = "Clustering diagnostics report",
   quiet = TRUE
@@ -48,6 +53,19 @@ variable importance (distance matrices grow as the square of it).}
 \item{n_null}{Number of null datasets when \code{null_silhouette = TRUE}.}
 
 \item{share_threshold}{Passed to \code{\link[=temporalStability]{temporalStability()}} as \code{threshold}.}
+
+\item{breakpoint_args}{List of settings passed to
+\code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}} for the \code{"breakpoints"} section.}
+
+\item{dom_cell_size, map_cell_size}{Cell sizes (degrees) of the dominance
+map and of the share and variable maps.}
+
+\item{map_limits}{Optional named list of colour limits \code{c(min, max)} for
+the variable maps (\code{CPUE}, \code{mean_len}, \code{mean_hbf}); default: 2nd and
+98th percentiles of the cells.}
+
+\item{map_per_fig}{Clusters per map figure (the maps of more clusters are
+split over several figures sharing one colour scale).}
 
 \item{var_limits}{Passed to \code{\link[=plotClusterVar]{plotClusterVar()}} as \code{limits}.}
 
@@ -84,6 +102,16 @@ replicate samples, fit years (\code{\link[=silhouetteStats]{silhouetteStats()}})
 cluster, all rows (\code{\link[=plotClusterVar]{plotClusterVar()}}).}
 \item{\code{"temporal"}}{per K, each cluster's share of each year's rows,
 fit years (\code{\link[=temporalStability]{temporalStability()}}).}
+\item{\code{"dominance"}}{per K, dominant cluster per cell
+(\code{\link[=plotDominance]{plotDominance()}}) and share of each cluster per cell
+(\code{\link[=plotClusterShare]{plotClusterShare()}}), in effort, fit years.}
+\item{\code{"maps"}}{per K, maps of CPUE, mean length and mean HBF per
+cluster with longitude and latitude profiles (\code{\link[=plotClusterMap]{plotClusterMap()}}),
+fit years.}
+\item{\code{"breakpoints"}}{per K, the monthly series of every cluster with
+the changes found by \code{\link[=analyseClusterBreakpoints]{analyseClusterBreakpoints()}}, fit years
+(\code{\link[=plotClusterBreakpoints]{plotClusterBreakpoints()}}). Details of each change are in
+\code{\link[=breakpointReport]{breakpointReport()}}.}
 }
 
 The subsamples of the silhouette and the variable importance are drawn

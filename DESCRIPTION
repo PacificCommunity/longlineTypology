@@ -28,6 +28,8 @@ Imports:
     EnvCpt
 Suggests: 
     knitr,
+    maps,
+    patchwork,
     randomForest,
     rmarkdown,
     testthat (>= 3.0.0)

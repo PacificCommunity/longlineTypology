@@ -32,7 +32,7 @@ plotGapSet <- function(gap_stat, SE.factor = 1, file = NULL) {
        (G[-1, , drop = FALSE] - SE.factor * S[-1, , drop = FALSE])
   graphics::matplot(ks[-length(ks)], D, type = "l", lty = 1, col = "#00000030", lwd = 1.5,
           xlab = "k", ylab = "Gap(k) - [Gap(k+1) - s(k+1)]",
-          main = "Selection criterion (first k above 0 wins)")
+          main = "Selection: first k >= 0")
   graphics::abline(h = 0, col = "firebrick", lwd = 2, lty = 2)
   sel <- apply(D, 2, function(z) { i <- which(z >= 0); if (length(i)) ks[i[1]] else NA })
   graphics::points(sel, rep(0, length(sel)), pch = 19, col = "firebrick", cex = 1.1)

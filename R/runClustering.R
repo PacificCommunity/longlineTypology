@@ -108,7 +108,8 @@ prepareClusterData <- function(data, scenario) {
 #'
 #' @examples
 #' \dontrun{
-#' mock <- system.file("extdata", "mockdata", "LL_mock.RDS", package = "longlineTypology")
+#' mock <- tempfile(fileext = ".RDS")
+#' saveRDS(mockLonglineData(), mock)
 #' diag <- runClustering(mock, "sp_hbf_latabs", outdir = "mock_outputs",
 #'                       sample_no = 100, max_k = 10)
 #' clusterReport(diag, output_file = "mock_report.pdf")

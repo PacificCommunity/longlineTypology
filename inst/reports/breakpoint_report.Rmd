@@ -1,0 +1,277 @@
+---
+title: "`r params$title`"
+params:
+  title: "Breakpoint report"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+geometry: "margin=2cm"
+fontsize: 10pt
+header-includes:
+  - \usepackage{float}
+  - \floatplacement{figure}{H}
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{etoolbox}
+  - \AtBeginEnvironment{longtable}{\small}
+---
+
+```{r setup, include = FALSE}
+## Rendered by breakpointReport(), which puts these objects in the rendering
+## environment: diagnostics, k, bp_data, ts, ctx, bp, card_rows, cards,
+## include_common, manual, detail, top_n.
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+					  fig.width = 7, fig.height = 4)
+library(longlineTypology)
+
+## Tables as LaTeX longtables: small font, page breaks, no wrapping in cells
+texEscape <- function(x) gsub("([_%&#$])", "\\\\\\1", x)
+kab <- function(x, caption = NULL, ...)
+	knitr::kable(x, format = "latex", booktabs = TRUE, longtable = TRUE, row.names = FALSE,
+				 linesep = "", label = NA, caption = if (!is.null(caption)) texEscape(caption), ...)
+fmtDate <- function(d) format(d, "%Y-%m")
+say <- function(...) cat(..., "\n\n", sep = "")
+VARS <- c("CPUE", "mean_len", "mean_hbf")
+fy <- if (is.null(diagnostics$fit_years)) c(1990, Inf) else diagnostics$fit_years
+fit_lab <- paste(range(bp_data$year), collapse = " to ")
+n_cl <- length(ctx$clusters)
+s <- ctx$settings
+lab_or_common <- function(b) ifelse(b$common, paste0(b$label, " (common)"), b$label)
+```
+
+Scenario **`r diagnostics$scenario`**, K = **`r k`** clusters, numbered by `clusterLabels()`. Rows of the fit years (`r fit_lab`): `r format(nrow(bp_data), big.mark = " ")`. Data: `r if (is.null(diagnostics$data_path)) "given as a data frame" else paste0("\x60", basename(diagnostics$data_path), "\x60")`. Package version `r as.character(utils::packageVersion("longlineTypology"))`; settings in Appendix B.
+
+# Summary
+
+```{r summary, results = "asis"}
+say("The analysis found **", nrow(bp), "** change(s) in the ", n_cl, " clusters x ",
+	length(s$variables), " variables. Counts per cluster and label (a change marked `common` ",
+	"is counted under `common`, not under its label):")
+lv <- c("unexplained", "switch", "ambiguous", "composition", "relocation", "transient", "gradual",
+		"no_timescale", "common")
+lab <- if (nrow(bp)) ifelse(bp$common, "common", bp$label) else character()
+tab <- table(factor(bp$cluster, ctx$clusters), factor(lab, lv))
+tab <- tab[, colSums(tab) > 0 | colnames(tab) %in% lv[1:7], drop = FALSE]
+out <- cbind(cluster = rownames(tab), as.data.frame.matrix(tab), total = rowSums(tab))
+print(kab(out))
+say("Each change has a row in the table of section 3. ",
+	if (identical(cards, "all")) "Every change" else
+		paste0("Changes labelled ", paste0("`", cards, "`", collapse = ", ")),
+	if (!include_common && !identical(cards, "all")) ", not marked common," else "",
+	" have a detailed section (", length(card_rows), " in section 4)",
+	if (length(manual)) paste0("; ", length(manual), " manual inspection(s) in section 5") else "", ".")
+```
+
+# How to read this report
+
+The report shows what the breakpoint analysis measured and which rules gave each label. It does not say what a change means for the clustering: that is for the reader to judge from the plots and tables, with this section as a guide. The method itself is described in Appendix A.
+
+## What the analysis looks for
+
+Each cluster has three monthly series: CPUE (`sum(yft_n) / sum(E)` over the rows of the month), mean length and mean hooks between floats (HBF). Imputed lengths and HBF are left out. The analysis looks, in each series, for a lasting change of level, and then describes it: how large it is, how fast it happened, and whether the fleet making up the cluster changed at the same time.
+
+Speeds are compared with a reference timescale **T~c~**, in months:
+
+- for CPUE and length, the age of fish at the mean length caught in the cluster, from a von Bertalanffy growth curve (about 3 years for yellowfin). Changes driven by the fish population (growth, a strong year class passing through the catch) take about this long;
+- for HBF, 12 months.
+
+A change faster than T~c~ is called *abrupt*, a slower one *gradual*.
+
+## How a change gets its label
+
+The steps run in this order. Steps 4 to 6 apply only to abrupt or ambiguous changes, step 6 only to composition changes.
+
+| Step | Question | What is measured | Rule |
+|:--------------|:------------------|:-----------------------|:------------------|
+| 1. Candidates | Does the series change at all? | EnvCpt fits 8 models to the whole series, with and without change points | candidates = change points of the best model (AIC) |
+| 2. Local test | Is the change larger than the noise around it? | fit of a lasting change (ramp) or a decaying one (pulse) against no change, on 6 years each side | kept if p < `r s$alpha` |
+| 3. Timing | How fast? | range of durations that fit the change [d~lo~, d~hi~] | compared with T~c~ |
+| 4. Flag mix | Did the flags making up the cluster change? | `comp_change`, ranked in the cluster's own history | p~comp~ < `r s$spatial_alpha` |
+| 5. Positions | Did the same flags fish elsewhere? | `reloc_km`, ranked in the cluster's own history | p~reloc~ < `r s$spatial_alpha` |
+| 6. Mirror | Did another cluster gain or lose the same flags? | `mirror_share` | >= `r s$mirror_min` |
+| 7. Other clusters | Did most clusters change at the same time? | clusters changing the same variable within `r s$common_tol_months` months | >= `r max(2, ceiling(s$common_min_share * n_cl))` of `r n_cl` |
+
+## Labels
+
+Each label is the result of the rules above, nothing more:
+
+| Label | Rule that assigned it |
+|:------------|:-------------------------------------------------------|
+| `transient` | the decaying pulse fits better than a lasting change, and decays within `r s$transient_tau_frac` x T~c~ |
+| `gradual` | every plausible duration is longer than T~c~ |
+| `ambiguous` | plausible durations on both sides of T~c~; flag mix and positions not unusual |
+| `composition` | abrupt or ambiguous; the flag mix changed more than in `r 100 * (1 - s$spatial_alpha)` % of the cluster's history; not mirrored |
+| `relocation` | abrupt or ambiguous; flag mix not unusual; the same flags moved more than in `r 100 * (1 - s$spatial_alpha)` % of the cluster's history |
+| `switch` | a composition change whose flag gains and losses are matched, for at least `r 100 * s$mirror_min` %, by the opposite change in one other cluster |
+| `unexplained` | every plausible duration is shorter than T~c~; flag mix and positions not unusual |
+| `common` | added to any label but `switch`: the same variable changed in most clusters at the same time |
+
+## Reading a detailed section
+
+Each detailed section (section 4) has the same blocks.
+
+**Summary line.** Label, dates, plausible duration, T~c~ and size of the change. For CPUE the size is a factor (x 0.6 = 40 % lower); for length and HBF it is in cm or hooks, and relative to the level of the year before.
+
+**A. The change.** The whole series, deseasoned (the average seasonal cycle removed; CPUE on a log axis, so equal factors look like equal steps). The grey band is the window of the local fit, the orange line the start of the change.
+
+**B. Data behind the change.** Rows of the cluster in the 12 months before the change, during it, and in the 12 months after it. *Rows with value* counts the rows that enter the series (all rows for CPUE, non-imputed values for length and HBF). Few rows per month, or empty months, make the monthly values noisy.
+
+**C. Timing.** Was the change faster or slower than T~c~?
+
+- *Local fit*: the deseasoned series (dark grey) around the change, with three fits: no change (grey), a lasting change spread over d months (red, the *ramp*), and a jump that decays back (green, the *pulse*). Orange shading: the transition of the best ramp; blue shading: the windows used in block D; orange bar at the top: the plausible end dates of the change (start + d~lo~ to start + d~hi~; a single point when the duration is known to the month).
+- *Duration profile*: the method tries every duration d from 1 to 96 months and keeps the best ramp of each. For each d, the plot shows how much worse that ramp fits than the best ramp of any duration (0 = the best duration). Durations below the dashed line (the 95 % cutoff) fit almost as well as the best one, so the data cannot rule them out: they are the red *plausible durations* [d~lo~, d~hi~], also shaded. The blue line is T~c~: all plausible durations on the "faster" side means **abrupt**, all on the "slower" side means **gradual**, on both sides means **ambiguous**. A sharp V with one red point means a well-determined duration; a flat curve with many red points means the data cannot tell a fast change from a slow one.
+- Under the plots, a sentence gives the values of T~c~ (and of the mean length that sets it) for which the class would change, since T~c~ depends on the growth parameters and is uncertain.
+
+**D. Fleet: flag mix and positions.** Did the fleet change when the series changed? The method compares the `r s$spatial_window` months before the change starts with the `r s$spatial_window` months after it ends (blue shading in the local fit).
+
+- *Flag mix*: share of the cluster's rows per flag in the two windows. `comp_change` is half the sum of the differences between the shares: the fraction of the cluster's rows that would have to change flag to make the two windows identical (0: same mix; 1: completely different flags).
+- *Centroid shifts*: mean position of each flag before (dot) and after (arrow end), for flags with at least 5 rows in both windows. `reloc_km` is the average of these shifts in km, weighted by min(rows before, rows after).
+- *Null distributions*: is this more than the cluster usually moves? The same pair of windows (`r s$spatial_window` months, a gap of d months, `r s$spatial_window` months) is slid along the cluster's whole history, one position every 3 months, and `comp_change` and `reloc_km` are computed at each position. The bars count these positions: they show how much the flag mix and the positions normally change in this cluster over a period of the same length. The red line is this change. Its p-value is (1 + positions with a value at least as large) / (1 + positions): p = 0.03 means only about 3 % of the cluster's history moved as much. The dashed line is the value to exceed for p < `r s$spatial_alpha`, about the top `r 100 * s$spatial_alpha` % of the bars; there is none when the history has too few positions (fewer than 19). Neighbouring positions overlap and the history includes the change itself and other real events, so p is a rank within the cluster's history rather than an exact probability. These two p-values decide `composition` and `relocation`.
+- *Robustness*: the flag-mix and position tests depend on the duration (which sets where the after window starts) and on the window length. They are repeated for each plausible duration and for windows of 6, 12 and 24 months; a sentence says whether the result changes, with a table of the cases when it does.
+
+**E. Rows moving between clusters.** Did the rows this cluster gained or lost go to (or come from) another cluster? For each flag, the change in its number of rows between the windows before and after is computed in this cluster and in every other cluster. Where a flag lost rows here and gained rows in another cluster (or the reverse), the smaller of the two counts as rows that moved between the two clusters. The *share matched* (`mirror_share`) is the rows matched, summed over flags, divided by the total change of this cluster, summed over flags (gains and losses together). It is a share of the change, not of the cluster: 0.26 means a quarter of the rows this cluster gained or lost by flag are matched by opposite changes in that cluster. A composition change with a share matched of at least `r s$mirror_min` is labelled `switch`. A second table gives the rows gained or lost per flag in every cluster.
+
+**F. Other clusters at the same time.** The variable before and after in every cluster and all clusters pooled, over the same windows. Changes found in the same variable of other clusters within 24 months, and the count used for `common`. The plot shows the three variables of the cluster around the change (raw scale), with the other changes of the cluster as dashed lines.
+
+**G. How the label was assigned.** Each rule of the table above with the value of its statistic, the condition, and whether it is met.
+
+## Glossary
+
+- **Deseasoned**: the mean of each calendar month over the whole series is removed, and the overall mean added back.
+- **Flag**: the fleet unit used for composition, positions and mirror (column `r s$group`).
+- **p (local test)**: probability of a change at least this strong in a series without change, corrected for autocorrelation. Nominal: the actual false-alarm rate was measured on mock data (Appendix C).
+- **p~comp~, p~reloc~**: rank of the change among all positions of the cluster's history: p = 0.03 means only about 3 % of positions have a value at least as large.
+
+# All series
+
+Monthly series of every cluster, fit years, with the changes found shaded from start to end (at least 9 months wide, so short changes stay visible) and coloured by label (black: marked common).
+
+```{r all_series, fig.height = 1.4 + 1.15 * n_cl}
+plotClusterBreakpoints(ts, bp, s$variables)
+```
+
+```{r all_changes, results = "asis"}
+if (!nrow(bp)) {
+	say("No change found.")
+} else {
+	ov <- data.frame(section = ifelse(seq_len(nrow(bp)) %in% card_rows,
+									  paste0("4.", match(seq_len(nrow(bp)), card_rows)), ""),
+					 cluster = bp$cluster, variable = bp$variable, start = fmtDate(bp$start_date),
+					 end = fmtDate(bp$end_date),
+					 d = sprintf("%d (%d-%d)", bp$d_hat, bp$d_lo, bp$d_hi), T_c = round(bp$T_c, 1),
+					 size = ifelse(bp$variable == "CPUE", sprintf("x %.2f", 1 + bp$delta_rel),
+								   sprintf("%+.1f", bp$delta)),
+					 p_comp = round(bp$p_comp, 3), p_reloc = round(bp$p_reloc, 3),
+					 mirror = round(bp$mirror_share, 2), label = paste0(bp$label, ifelse(bp$common, " *", "")))
+	options(knitr.kable.NA = "")
+	print(kab(ov, caption = "All changes, by cluster, variable and date. d: duration in months, best estimate (plausible range). p_comp, p_reloc and mirror: blank when not computed. *: marked common."))
+}
+```
+
+\newpage
+
+# Detailed changes
+
+```{r cards, results = "asis"}
+if (!length(card_rows)) say("No change selected for a detailed section.")
+for (i in seq_along(card_rows)) {
+	r   <- bp[card_rows[i], , drop = FALSE]
+	ins <- inspectBreakpoint(ctx, row = r, envcpt = detail)
+	card_title <- sprintf("Cluster %s, %s, %s: %s", r$cluster, r$variable, fmtDate(r$start_date),
+						  lab_or_common(r))
+	cat(knitr::knit_child("breakpoint_card.Rmd", envir = environment(), quiet = TRUE), sep = "\n")
+}
+```
+
+# Manual inspections
+
+```{r manual, results = "asis"}
+if (!length(manual)) say("None requested (argument `manual` of `breakpointReport()`).")
+for (i in seq_along(manual)) {
+	m <- manual[[i]]
+	ins <- tryCatch(inspectBreakpoint(ctx, cluster = m$cluster, variable = m$variable,
+									  at = m$at, envcpt = detail), error = function(e) e)
+	card_title <- sprintf("Cluster %s, %s, %s", m$cluster, m$variable, paste(m$at, collapse = " to "))
+	if (inherits(ins, "error")) {
+		say("## ", card_title)
+		say(conditionMessage(ins))
+	} else cat(knitr::knit_child("breakpoint_card.Rmd", envir = environment(), quiet = TRUE), sep = "\n")
+}
+```
+
+# Data coverage
+
+All clusters, fit years. Use these tables to check whether a change coincides with a change in the data themselves: a flag starting or stopping to report, a change of length source, or of the share of valid HBF.
+
+```{r coverage, results = "asis"}
+yrs <- sort(unique(bp_data$year))
+top <- names(sort(table(bp_data$flag), decreasing = TRUE))[seq_len(min(top_n, length(unique(bp_data$flag))))]
+fl  <- ifelse(bp_data$flag %in% top, as.character(bp_data$flag), "other")
+t1  <- table(factor(bp_data$year, yrs), factor(fl, c(top, if (any(fl == "other")) "other")))
+print(kab(cbind(year = yrs, as.data.frame.matrix(t1), total = rowSums(t1)),
+		  caption = sprintf("Rows per year and flag (%d flags with the most rows).", length(top))))
+cat("\n\n")
+t2 <- table(factor(bp_data$year, yrs), factor(bp_data$cluster, ctx$clusters))
+print(kab(cbind(year = yrs, as.data.frame.matrix(t2)), caption = "Rows per year and cluster."))
+cat("\n\n")
+per_year <- data.frame(year = yrs, rows = as.numeric(table(factor(bp_data$year, yrs))))
+by_y <- split(bp_data, factor(bp_data$year, yrs))
+for (v in VARS) per_year[[v]] <- signif(vapply(by_y, function(x) longlineTypology:::.bpValue(x, v), numeric(1)), 3)
+if ("len_source" %in% names(bp_data)) {
+	ls <- prop.table(table(factor(bp_data$year, yrs), bp_data$len_source), 1)
+	for (j in colnames(ls)) per_year[[paste0("len: ", j)]] <- round(ls[, j], 2)
+}
+if ("hbf_outlier" %in% names(bp_data))
+	per_year$`valid HBF` <- round(vapply(by_y, function(x) mean(x$hbf_outlier %in% "valid"), numeric(1)), 2)
+print(kab(per_year, caption = paste("All clusters pooled, per year: rows, values of the three variables",
+									"(imputed values left out), share of rows per length source and",
+									"share of rows with valid HBF.")))
+```
+
+\newpage
+\appendix
+
+# Method
+
+**Series.** `aggregateClusterTimeSeries()` builds one monthly series per cluster and variable. Months without value are dropped; series shorter than 48 months are not analysed. CPUE is log-transformed (zeros replaced by half the smallest positive value), so a change of $\delta$ is a change by a factor $e^\delta$. Each series is deseasoned.
+
+**Candidates.** `EnvCpt::envcpt()` fits 8 models to the whole series: constant mean or linear trend, independent or AR(1) noise, with or without change points (placed by PELT, at least 12 months apart). The model with the lowest AIC is kept; its change points, if any, are the candidates. AR(1) models describe runs of months above or below the mean without any change, which keeps false alarms low but can also absorb a real change that later recovers.
+
+**Local test and timing.** Each candidate is refitted on `r s$window` months each side with three models: a straight line (no change), the line plus a change spread over d months (ramp, d from 1 to 96, start within about a year of the candidate), and the line plus a decaying pulse. The best ramp gives the start, the duration `d_hat` and the size. The change is kept if the ramp or the pulse fits better than no change at p < `r s$alpha`, with the sample size corrected for autocorrelation. [d~lo~, d~hi~] is the range of durations that fit almost as well as the best one (95 % profile interval). When two changes overlap (within 6 months), the stronger is kept. T~c~ is the median von Bertalanffy age at the mean length within 12 months of the candidate (L~inf~ = `r s$Linf` cm, K = `r s$K` per year, t~0~ = `r s$t0` years; yellowfin, Farley et al. 2020), or `r s$hbf_abrupt_months` months for HBF.
+
+**Flag mix and positions.** The `r s$spatial_window` months before the start are compared with the `r s$spatial_window` months after the end. `comp_change` is the total-variation distance between the flag shares of the two windows. `reloc_km` is the shift of the mean position of each flag with at least 5 rows in both windows (great-circle distance), averaged with weights min(rows before, rows after). Both statistics are recomputed with the same windows at every position of the cluster's history (every 3 months); p = (1 + positions with a value at least as large) / (1 + positions). Composition is tested first.
+
+**Mirror.** For each composition change and each other cluster, the rows gained here and lost there, plus those lost here and gained there, are counted per flag (the smaller of the two); `mirror_share` is their sum over the total per-flag change in this cluster. The best-matching cluster is reported.
+
+**Common.** A change (except `switch`) is marked common if at least max(2, ceiling(`r s$common_min_share` x K)) clusters have a non-switch change in the same variable starting within `r s$common_tol_months` months.
+
+# Settings
+
+```{r settings, results = "asis"}
+defaults <- formals(breakpointContext)
+rows <- lapply(names(s), function(nm) {
+	val <- s[[nm]]; def <- if (nm %in% names(defaults)) eval(defaults[[nm]]) else NULL
+	data.frame(setting = nm, value = paste(format(val), collapse = ", "),
+			   default = if (is.null(def)) "" else if (identical(val, def)) "yes" else "no")
+})
+print(kab(do.call(rbind, rows), caption = "Settings of breakpointContext() used for this report."))
+```
+
+# Detection limits
+
+From simulations on mock data with the noise level, autocorrelation, seasonality and trends of real clusters (calibration document). Sizes in units of the residual SD of a series; in a typical cluster 6 SD is about a factor 5 in CPUE, 14 cm in mean length and 11 hooks in HBF.
+
+| Variable | Detected in at least 90 % of simulations | Classified abrupt in at least 80 % |
+|:-----------|:-----------------------|:-----------------------|
+| CPUE | about 4 SD (a factor of about 3) | about 6 to 8 SD (a factor of 5 to 9) |
+| mean length | about 4 SD (about 9 cm) | about 6 to 8 SD (14 to 18 cm) |
+| mean HBF | about 4 SD (about 7 hooks) | about 6 to 8 SD (11 to 15 hooks) |
+
+- On series without change, about 0.1 changes per series were labelled abrupt.
+- Changes within about 2 years of either end of a series cannot be characterised.
+- A cluster with fewer than about 78 + d months of data cannot reach p~comp~ or p~reloc~ < 0.05.
+- A change of vessels within the same flag is invisible to the flag-mix and mirror tests.
+
+**Reference.** Farley, J., Krusic-Golub, K., Eveson, P., Clear, N., Roupsard, F., Sanchez, C., Nicol, S. and Hampton, J. (2020). Age and growth of yellowfin and bigeye tuna in the western and central Pacific Ocean from otoliths. WCPFC-SC16-2020/SA-WP-02.

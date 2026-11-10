@@ -11,7 +11,8 @@ geometry: "top=1in, bottom=1in, left=0.75in, right=0.75in"
 ```{r setup, include = FALSE}
 ## Rendered by clusterReport(), which puts these objects in the rendering
 ## environment: diagnostics, data, scores, fit_rows, sections, ks,
-## subsample_size, seed, null_silhouette, n_null, share_threshold, var_limits.
+## subsample_size, seed, null_silhouette, n_null, share_threshold, var_limits,
+## breakpoint_args, dom_cell_size, map_cell_size, map_limits, map_per_fig.
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
 					  fig.width = 6.5, fig.height = 5)
 library(longlineTypology)
@@ -22,7 +23,8 @@ fit_lab <- if (is.finite(fy[2])) paste(fy[1], "to", fy[2]) else
 all_lab <- paste(range(as.integer(format(data$ymd, "%Y"))), collapse = " to ")
 scores_fit <- scores[fit_rows, , drop = FALSE]
 years_fit  <- as.integer(format(data$ymd[fit_rows], "%Y"))
-per_k_sections <- c("centroids", "jaccard", "silhouette", "varimp", "vardist", "temporal")
+per_k_sections <- c("centroids", "jaccard", "silhouette", "varimp", "vardist", "temporal",
+                    "dominance", "maps", "breakpoints")
 ```
 
 Scenario: `r diagnostics$scenario`. Clustering variables: `r paste(diagnostics$pca_select, collapse = ", ")`. Principal components used: `r diagnostics$n_components`. Fit years: `r fit_lab`.
